@@ -35,29 +35,29 @@ class AudioAnalyzer:
                 "feedback": 改善アドバイス
             }
         """
-        # Step1: 音源分離
-        tracks = self.separator.separate(audio_path)
+        # 音源分離：ボーカル・ドラム・ベース・その他に分離
+        separated_tracks = self.separator.separate(audio_path)
 
-        # Step2: ピッチ検出
-        pitch_data = self.pitch_detector.detect(tracks["vocals"])
+        # ボーカルトラックからピッチを検出
+        pitch_data = self.pitch_detector.detect(separated_tracks["vocals"])
 
-        # Step3: 歌唱技法検出
-        techniques = self.technique_detector.detect_all(pitch_data)
+        # ピッチデータから歌唱技法を検出
+        detected_techniques = self.technique_detector.detect_all(pitch_data)
 
-        # Step4: 声域の計算
+        # 声域（最低音〜最高音）を計算
         vocal_range = self._calculate_vocal_range(pitch_data)
 
-        # Step5: スコア計算
+        # ピッチ正確性とリズム感のスコアを計算
         pitch_accuracy = self.pitch_detector.calculate_accuracy(pitch_data, {})
         rhythm_score = self._calculate_rhythm_score(pitch_data)
 
-        # Step6: フィードバック生成
-        feedback = self._generate_feedback(pitch_accuracy, techniques)
+        # 分析結果をもとに改善アドバイスを生成
+        feedback = self._generate_feedback(pitch_accuracy, detected_techniques)
 
         return {
             "pitch_accuracy": pitch_accuracy,
             "rhythm_score": rhythm_score,
-            "techniques": techniques,
+            "techniques": detected_techniques,
             "vocal_range": vocal_range,
             "feedback": feedback,
         }
@@ -72,7 +72,7 @@ class AudioAnalyzer:
         # TODO: BPMに対するタイミングのズレを分析する
         return 0.0
 
-    def _generate_feedback(self, pitch_accuracy: float, techniques: dict) -> str:
+    def _generate_feedback(self, pitch_accuracy: float, detected_techniques: dict) -> str:
         """分析結果をもとに改善アドバイスを生成する"""
         # TODO: スコアと技法データをもとに具体的なアドバイスを生成する
         return "分析完了。詳細なフィードバックは今後実装予定です。"

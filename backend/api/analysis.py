@@ -14,7 +14,8 @@ router = APIRouter(prefix="/api/v1/analysis", tags=["analysis"])
 # 分析結果の一時保存（後でPostgreSQLに置き換える）
 analysis_store: dict = {}
 
-analyzer = AudioAnalyzer()
+# アプリ起動時に1回だけインスタンス化（Demucsモデルのロードが重いため）
+audio_analyzer = AudioAnalyzer()
 
 
 @router.post("/upload")
@@ -49,13 +50,15 @@ async def upload_audio(
 
     # 一時ファイルに保存して分析
     analysis_id = str(uuid.uuid4())
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+    import os
+    suffix = os.path.splitext(audio_file.filename)[1]  # .m4a / .mp3 / .wav を取得
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
 
     try:
         # 音声分析を実行
-        result = analyzer.analyze(tmp_path)
+        result = audio_analyzer.analyze(tmp_path)
         result["analysis_id"] = analysis_id
         result["song_title"] = song_title
         result["artist_name"] = artist_name
