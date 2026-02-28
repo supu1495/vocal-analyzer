@@ -40,6 +40,7 @@ class TechniqueDetector:
             }
         """
         # TODO: ピッチの周期的変動をFFTで検出する
+        
         return {"count": 0, "avg_frequency": 0.0, "avg_depth": 0.0}
 
     def detect_kobushi(self, pitch_data: dict) -> dict:
