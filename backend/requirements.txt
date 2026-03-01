@@ -16,3 +16,5 @@ numpy==1.26.3
 soundfile==0.12.1
 torch==2.1.2
 torchaudio==2.1.2
+tensorflow==2.15.0
+resampy==0.2.2
