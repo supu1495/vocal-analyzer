@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 // --- 型定義 ---
 type Screen = 'upload' | 'result' | 'dashboard'
@@ -23,14 +23,13 @@ interface AnalysisResult {
   }
 }
 
-// --- ダミー統計データ ---
-const DUMMY_HISTORY = [
-  { date: '02/10', pitch: 62, rhythm: 70 },
-  { date: '02/14', pitch: 67, rhythm: 72 },
-  { date: '02/18', pitch: 71, rhythm: 68 },
-  { date: '02/22', pitch: 69, rhythm: 75 },
-  { date: '02/28', pitch: 74, rhythm: 78 },
-]
+// --- 統計データの型 ---
+interface Statistics {
+  history: { date: string; pitch: number; rhythm: number }[]
+  total_count: number
+  best_pitch: number
+  growth_rate: number
+}
 
 // --- スコアリング円グラフ ---
 function ScoreRing({ score, label, color }: { score: number; label: string; color: string }) {
@@ -79,7 +78,7 @@ function TechniqueBar({ label, value, max, color }: { label: string; value: numb
 }
 
 // --- 折れ線グラフ（SVGシンプル版）---
-function LineChart({ data }: { data: typeof DUMMY_HISTORY }) {
+function LineChart({ data }: { data: Statistics['history'] }) {
   const w = 340; const h = 100; const pad = 20
   const maxVal = 100
   const xs = data.map((_, i) => pad + (i / (data.length - 1)) * (w - pad * 2))
@@ -345,6 +344,21 @@ function DashboardScreen({ latestResult, onBack }: {
   latestResult: AnalysisResult | null
   onBack: () => void
 }) {
+  const [stats, setStats] = useState<Statistics | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    fetch('/api/v1/analysis/user/statistics')
+      .then(res => {
+        if (!res.ok) throw new Error(`サーバーエラー: ${res.status}`)
+        return res.json()
+      })
+      .then((data: Statistics) => setStats(data))
+      .catch(e => setError(e instanceof Error ? e.message : '統計の取得に失敗しました'))
+      .finally(() => setLoading(false))
+  }, [])
+
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto', padding: '40px 20px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
@@ -358,23 +372,38 @@ function DashboardScreen({ latestResult, onBack }: {
         }}>← 戻る</button>
       </div>
 
+      {loading && <p style={{ color: '#555', textAlign: 'center' }}>読み込み中...</p>}
+      {error && <p style={{ color: '#f87171', textAlign: 'center' }}>{error}</p>}
+
       {/* グラフ */}
-      <div style={{
-        background: 'rgba(255,255,255,0.02)', border: '1px solid #1e1e2e',
-        borderRadius: '16px', padding: '24px', marginBottom: '20px'
-      }}>
-        <div style={{ display: 'flex', gap: '16px', marginBottom: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <div style={{ width: '12px', height: '3px', background: '#c084fc', borderRadius: '2px' }} />
-            <span style={{ color: '#888', fontSize: '12px' }}>ピッチ精度</span>
+      {stats && stats.history.length > 0 && (
+        <div style={{
+          background: 'rgba(255,255,255,0.02)', border: '1px solid #1e1e2e',
+          borderRadius: '16px', padding: '24px', marginBottom: '20px'
+        }}>
+          <div style={{ display: 'flex', gap: '16px', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <div style={{ width: '12px', height: '3px', background: '#c084fc', borderRadius: '2px' }} />
+              <span style={{ color: '#888', fontSize: '12px' }}>ピッチ精度</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <div style={{ width: '12px', height: '3px', background: '#34d399', borderRadius: '2px' }} />
+              <span style={{ color: '#888', fontSize: '12px' }}>リズム感</span>
+            </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <div style={{ width: '12px', height: '3px', background: '#34d399', borderRadius: '2px' }} />
-            <span style={{ color: '#888', fontSize: '12px' }}>リズム感</span>
-          </div>
+          <LineChart data={stats.history} />
         </div>
-        <LineChart data={DUMMY_HISTORY} />
-      </div>
+      )}
+
+      {stats && stats.history.length === 0 && !loading && (
+        <div style={{
+          background: 'rgba(255,255,255,0.02)', border: '1px solid #1e1e2e',
+          borderRadius: '16px', padding: '40px', marginBottom: '20px', textAlign: 'center'
+        }}>
+          <p style={{ color: '#555', fontSize: '14px' }}>まだ分析データがありません。</p>
+          <p style={{ color: '#444', fontSize: '12px', marginTop: '8px' }}>音声をアップロードすると推移グラフが表示されます。</p>
+        </div>
+      )}
 
       {/* 最新スコア */}
       {latestResult && (
@@ -399,14 +428,12 @@ function DashboardScreen({ latestResult, onBack }: {
         </div>
       )}
 
-      {/* 練習回数 */}
-      <div style={{
-        display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px'
-      }}>
+      {/* サマリーカード */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
         {[
-          { label: '総分析回数', value: DUMMY_HISTORY.length + (latestResult ? 1 : 0), unit: '回' },
-          { label: '最高ピッチ', value: Math.max(...DUMMY_HISTORY.map(d => d.pitch)), unit: 'pt' },
-          { label: '成長率', value: '+18', unit: '%' },
+          { label: '総分析回数', value: stats?.total_count ?? '-', unit: '回' },
+          { label: '最高ピッチ', value: stats?.best_pitch ?? '-', unit: 'pt' },
+          { label: '成長率', value: stats ? `+${stats.growth_rate}` : '-', unit: '%' },
         ].map(({ label, value, unit }) => (
           <div key={label} style={{
             background: 'rgba(255,255,255,0.02)', border: '1px solid #1e1e2e',
