@@ -1,18 +1,18 @@
 """
 音声分析APIエンドポイント
-音声ファイルのアップロードと分析結果の取得を担当する
+音声ファイルのアップロード・分析結果の取得・統計情報の取得を担当する
 """
 
-import uuid
 import os
 import tempfile
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from sqlalchemy.orm import Session
+
 from audio.analyzer import AudioAnalyzer
+from database import get_db
+from models import AnalysisResult
 
 router = APIRouter(prefix="/api/v1/analysis", tags=["analysis"])
-
-# 分析結果の一時保存（後でPostgreSQLに置き換える）
-analysis_store: dict = {}
 
 # アプリ起動時に1回だけインスタンス化（Demucsモデルのロードが重いため）
 audio_analyzer = AudioAnalyzer()
@@ -23,63 +23,158 @@ async def upload_audio(
     audio_file: UploadFile = File(...),
     song_title: str = "",
     artist_name: str = "",
+    db: Session = Depends(get_db),
 ):
     """
-    音声ファイルをアップロードして分析を開始する
+    音声ファイルをアップロードして分析し、結果をDBに保存する
 
     - audio_file: 音声ファイル（WAV/MP3/M4A）
     - song_title: 楽曲名（任意）
     - artist_name: アーティスト名（任意）
     """
-    # ファイル形式の検証
+    _validate_audio_file(audio_file)
+
+    content = await audio_file.read()
+    _validate_file_size(content)
+
+    analysis_data = _run_analysis(audio_file.filename, content, song_title, artist_name)
+
+    saved = _save_to_db(db, song_title, artist_name, analysis_data)
+
+    return {
+        "analysis_id": saved.id,
+        "status": "completed",
+        "result": analysis_data,
+    }
+
+
+@router.get("/user/statistics")
+def get_user_statistics(db: Session = Depends(get_db)):
+    """
+    全分析結果の統計情報を返す（認証実装後はログインユーザーのみに絞る）
+
+    ダッシュボード画面のグラフ・サマリー表示に使用する
+    """
+    results = (
+        db.query(AnalysisResult)
+        .order_by(AnalysisResult.created_at.asc())
+        .all()
+    )
+
+    history = [
+        {
+            "date": r.created_at.strftime("%m/%d"),
+            "pitch": round(r.pitch_accuracy) if r.pitch_accuracy is not None else 0,
+            "rhythm": round(r.rhythm_score) if r.rhythm_score is not None else 0,
+        }
+        for r in results
+    ]
+
+    pitch_values = [h["pitch"] for h in history]
+    growth_rate = _calculate_growth_rate(pitch_values)
+
+    return {
+        "history": history,
+        "total_count": len(history),
+        "best_pitch": max(pitch_values) if pitch_values else 0,
+        "growth_rate": growth_rate,
+    }
+
+
+@router.get("/{analysis_id}")
+def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
+    """
+    指定IDの分析結果を取得する
+
+    - analysis_id: アップロード時に返されたID
+    """
+    result = db.query(AnalysisResult).filter(AnalysisResult.id == analysis_id).first()
+    if result is None:
+        raise HTTPException(status_code=404, detail="分析結果が見つかりません。")
+
+    return {
+        "analysis_id": result.id,
+        "song_title": result.song_title,
+        "artist_name": result.artist_name,
+        "result": {
+            "pitch_accuracy": result.pitch_accuracy,
+            "rhythm_score": result.rhythm_score,
+            "techniques": result.techniques,
+            "vocal_range": result.vocal_range,
+            "feedback": result.feedback,
+        },
+    }
+
+
+# ── プライベート関数 ──────────────────────────────────────────────────────────
+
+
+def _validate_audio_file(audio_file: UploadFile) -> None:
+    """ファイル形式を検証する"""
     allowed_types = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/x-m4a"]
     if audio_file.content_type not in allowed_types:
         raise HTTPException(
             status_code=400,
-            detail=f"対応していないファイル形式です。WAV/MP3/M4Aのみ対応しています。",
+            detail="対応していないファイル形式です。WAV/MP3/M4Aのみ対応しています。",
         )
 
-    # ファイルサイズの検証（50MB以上は拒否）
-    MAX_SIZE = 50 * 1024 * 1024  # 50MB
-    content = await audio_file.read()
-    if len(content) > MAX_SIZE:
+
+def _validate_file_size(content: bytes) -> None:
+    """ファイルサイズを検証する（50MB超は拒否）"""
+    max_size = 50 * 1024 * 1024
+    if len(content) > max_size:
         raise HTTPException(
             status_code=400,
             detail="ファイルサイズが大きすぎます。50MB以下にしてください。",
         )
 
-    # 一時ファイルに保存して分析
-    analysis_id = str(uuid.uuid4())
-    import os
-    suffix = os.path.splitext(audio_file.filename)[1]  # .m4a / .mp3 / .wav を取得
+
+def _run_analysis(
+    filename: str, content: bytes, song_title: str, artist_name: str
+) -> dict:
+    """
+    一時ファイルに書き出して音声分析を実行する
+    分析後は著作権保護のため一時ファイルを即時削除する
+    """
+    suffix = os.path.splitext(filename)[1]
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
 
     try:
-        # 音声分析を実行
         result = audio_analyzer.analyze(tmp_path)
-        result["analysis_id"] = analysis_id
         result["song_title"] = song_title
         result["artist_name"] = artist_name
-
-        # 結果を一時保存
-        analysis_store[analysis_id] = result
+        return result
     finally:
-        # 音声ファイルは即時削除（著作権保護）
         os.unlink(tmp_path)
 
-    return {"analysis_id": analysis_id, "status": "completed", "result": result}
+
+def _save_to_db(
+    db: Session, song_title: str, artist_name: str, analysis_data: dict
+) -> AnalysisResult:
+    """分析結果をPostgreSQLに保存してcommitする"""
+    record = AnalysisResult(
+        song_title=song_title,
+        artist_name=artist_name,
+        pitch_accuracy=analysis_data.get("pitch_accuracy"),
+        rhythm_score=analysis_data.get("rhythm_score"),
+        techniques=analysis_data.get("techniques"),
+        vocal_range=analysis_data.get("vocal_range"),
+        feedback=analysis_data.get("feedback"),
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
 
 
-@router.get("/{analysis_id}")
-async def get_analysis(analysis_id: str):
+def _calculate_growth_rate(pitch_values: list[float]) -> int:
     """
-    分析結果を取得する
-
-    - analysis_id: アップロード時に返されたID
+    最初と最後のピッチスコアから成長率（%）を計算する
+    データが2件未満の場合は0を返す
     """
-    if analysis_id not in analysis_store:
-        raise HTTPException(status_code=404, detail="分析結果が見つかりません。")
-
-    return analysis_store[analysis_id]
+    if len(pitch_values) < 2 or pitch_values[0] == 0:
+        return 0
+    growth = ((pitch_values[-1] - pitch_values[0]) / pitch_values[0]) * 100
+    return round(growth)
