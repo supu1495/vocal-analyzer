@@ -23,10 +23,10 @@
 
 | レイヤー | 技術 |
 |---|---|
-| フロントエンド | TypeScript + React + Vite、Web Audio API |
-| バックエンド | Python 3.11+、FastAPI |
+| フロントエンド | TypeScript、React、Vite、Web Audio API |
+| バックエンド | Python 3.11、FastAPI |
 | 音声処理 | Demucs v4、librosa、Crepe、PyTorch |
-| データベース | PostgreSQL 15+、Redis |
+| データベース | PostgreSQL 15、Redis |
 | インフラ | Docker、Docker Compose、Nginx |
 
 ---
