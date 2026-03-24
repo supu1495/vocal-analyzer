@@ -9,8 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
 from audio.analyzer import AudioAnalyzer
+from auth_utils import get_current_user, get_optional_user
 from database import get_db
-from models import AnalysisResult
+from models import AnalysisResult, User
 
 router = APIRouter(prefix="/api/v1/analysis", tags=["analysis"])
 
@@ -24,6 +25,7 @@ async def upload_audio(
     song_title: str = "",
     artist_name: str = "",
     db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_current_user),
 ):
     """
     音声ファイルをアップロードして分析し、結果をDBに保存する
@@ -39,7 +41,7 @@ async def upload_audio(
 
     analysis_data = _run_analysis(audio_file.filename, content, song_title, artist_name)
 
-    saved = _save_to_db(db, song_title, artist_name, analysis_data)
+    saved = _save_to_db(db, song_title, artist_name, analysis_data, current_user.id)
 
     return {
         "analysis_id": saved.id,
@@ -49,14 +51,18 @@ async def upload_audio(
 
 
 @router.get("/user/statistics")
-def get_user_statistics(db: Session = Depends(get_db)):
+def get_user_statistics(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
-    全分析結果の統計情報を返す（認証実装後はログインユーザーのみに絞る）
+    ログインユーザーの分析結果統計を返す
 
     ダッシュボード画面のグラフ・サマリー表示に使用する
     """
     results = (
         db.query(AnalysisResult)
+        .filter(AnalysisResult.user_id == current_user.id)
         .order_by(AnalysisResult.created_at.asc())
         .all()
     )
@@ -151,10 +157,11 @@ def _run_analysis(
 
 
 def _save_to_db(
-    db: Session, song_title: str, artist_name: str, analysis_data: dict
+    db: Session, song_title: str, artist_name: str, analysis_data: dict, user_id: int
 ) -> AnalysisResult:
     """分析結果をPostgreSQLに保存してcommitする"""
     record = AnalysisResult(
+        user_id=user_id,
         song_title=song_title,
         artist_name=artist_name,
         pitch_accuracy=analysis_data.get("pitch_accuracy"),
