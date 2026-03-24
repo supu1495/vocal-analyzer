@@ -8,9 +8,12 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from auth_utils import (
+    check_lockout,
+    clear_lockout,
     create_access_token,
     get_current_user,
     hash_password,
+    record_login_failure,
     verify_password,
 )
 from database import get_db
@@ -89,10 +92,14 @@ def login(body: LoginRequest, response: Response, db: Session = Depends(get_db))
 
     - email / password が一致すればhttpOnly CookieにJWTを発行する
     """
+    check_lockout(body.email)
+
     user = db.query(User).filter(User.email == body.email).first()
     if user is None or not verify_password(body.password, user.hashed_password):
+        record_login_failure(body.email)
         raise HTTPException(status_code=401, detail="メールアドレスまたはパスワードが正しくありません。")
 
+    clear_lockout(body.email)
     token = create_access_token(user.id)
     response.set_cookie(
         key="access_token",
