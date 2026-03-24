@@ -4,7 +4,6 @@ import { useState, useEffect, type CSSProperties } from 'react'
 type Screen = 'login' | 'register' | 'upload' | 'result' | 'dashboard'
 
 interface AuthState {
-  token: string
   userId: number
   email: string
 }
@@ -34,31 +33,6 @@ interface Statistics {
   total_count: number
   best_pitch: number
   growth_rate: number
-}
-
-// --- ローカルストレージキー ---
-const AUTH_KEY = 'vocal_analyzer_auth'
-
-function loadAuth(): AuthState | null {
-  try {
-    const raw = localStorage.getItem(AUTH_KEY)
-    return raw ? JSON.parse(raw) : null
-  } catch {
-    return null
-  }
-}
-
-function saveAuth(auth: AuthState) {
-  localStorage.setItem(AUTH_KEY, JSON.stringify(auth))
-}
-
-function clearAuth() {
-  localStorage.removeItem(AUTH_KEY)
-}
-
-// --- 認証付きfetchヘルパー ---
-function authHeaders(token: string): HeadersInit {
-  return { Authorization: `Bearer ${token}` }
 }
 
 // --- UIパーツ ---
@@ -171,13 +145,12 @@ function AuthScreen({
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ email, password }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail ?? 'エラーが発生しました。')
-      const auth: AuthState = { token: data.access_token, userId: data.user_id, email: data.email }
-      saveAuth(auth)
-      onSuccess(auth)
+      onSuccess({ userId: data.user_id, email: data.email })
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'エラーが発生しました。')
     } finally {
@@ -254,7 +227,7 @@ function AuthScreen({
 // =====================
 // 画面1: アップロード
 // =====================
-function UploadScreen({ token, onResult }: { token: string; onResult: (r: AnalysisResult) => void }) {
+function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
   const [dragging, setDragging] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [songTitle, setSongTitle] = useState('')
@@ -280,7 +253,7 @@ function UploadScreen({ token, onResult }: { token: string; onResult: (r: Analys
       const form = new FormData()
       form.append('audio_file', file)
       const url = `/api/v1/analysis/upload?song_title=${encodeURIComponent(songTitle)}&artist_name=${encodeURIComponent(artistName)}`
-      const res = await fetch(url, { method: 'POST', headers: authHeaders(token), body: form })
+      const res = await fetch(url, { method: 'POST', credentials: 'include', body: form })
       if (!res.ok) throw new Error(`サーバーエラー: ${res.status}`)
       const data: AnalysisResult = await res.json()
       onResult({ ...data, song_title: songTitle, artist_name: artistName })
@@ -423,15 +396,15 @@ function ResultScreen({ result, onBack, onDashboard }: {
 // =====================
 // 画面3: 統計ダッシュボード
 // =====================
-function DashboardScreen({ token, latestResult, onBack }: {
-  token: string; latestResult: AnalysisResult | null; onBack: () => void
+function DashboardScreen({ latestResult, onBack }: {
+  latestResult: AnalysisResult | null; onBack: () => void
 }) {
   const [stats, setStats] = useState<Statistics | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    fetch('/api/v1/analysis/user/statistics', { headers: authHeaders(token) })
+    fetch('/api/v1/analysis/user/statistics', { credentials: 'include' })
       .then(res => { if (!res.ok) throw new Error(`サーバーエラー: ${res.status}`); return res.json() })
       .then((data: Statistics) => setStats(data))
       .catch(e => setError(e instanceof Error ? e.message : '統計の取得に失敗しました'))
@@ -514,13 +487,22 @@ function DashboardScreen({ token, latestResult, onBack }: {
 // メインApp
 // =====================
 export default function App() {
-  const [auth, setAuth] = useState<AuthState | null>(loadAuth)
-  const [screen, setScreen] = useState<Screen>(() => (loadAuth() ? 'upload' : 'login'))
+  const [auth, setAuth] = useState<AuthState | null>(null)
+  const [screen, setScreen] = useState<Screen>('login')
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null)
 
+  // 起動時にCookieの有効性を確認してログイン状態を復元する
   useEffect(() => {
-    if (!auth && screen !== 'login' && screen !== 'register') setScreen('login')
-  }, [auth, screen])
+    fetch('/api/v1/auth/me', { credentials: 'include' })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data) {
+          setAuth({ userId: data.user_id, email: data.email })
+          setScreen('upload')
+        }
+      })
+      .catch(() => {/* Cookie無効 or 未ログイン → login画面のまま */})
+  }, [])
 
   const handleAuthSuccess = (newAuth: AuthState) => {
     setAuth(newAuth)
@@ -528,7 +510,6 @@ export default function App() {
   }
 
   const handleLogout = () => {
-    clearAuth()
     setAuth(null)
     setAnalysisResult(null)
     setScreen('login')
@@ -573,12 +554,12 @@ export default function App() {
       <main>
         {screen === 'login' && <AuthScreen mode="login" onSuccess={handleAuthSuccess} onToggle={() => setScreen('register')} />}
         {screen === 'register' && <AuthScreen mode="register" onSuccess={handleAuthSuccess} onToggle={() => setScreen('login')} />}
-        {screen === 'upload' && auth && <UploadScreen token={auth.token} onResult={handleResult} />}
+        {screen === 'upload' && auth && <UploadScreen onResult={handleResult} />}
         {screen === 'result' && auth && analysisResult && (
           <ResultScreen result={analysisResult} onBack={() => setScreen('upload')} onDashboard={() => setScreen('dashboard')} />
         )}
         {screen === 'dashboard' && auth && (
-          <DashboardScreen token={auth.token} latestResult={analysisResult} onBack={() => setScreen(analysisResult ? 'result' : 'upload')} />
+          <DashboardScreen latestResult={analysisResult} onBack={() => setScreen(analysisResult ? 'result' : 'upload')} />
         )}
       </main>
     </div>

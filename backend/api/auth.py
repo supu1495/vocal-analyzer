@@ -3,7 +3,7 @@
 ユーザー登録・ログイン・プロフィール取得を担当する
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
@@ -32,9 +32,7 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
+class AuthResponse(BaseModel):
     user_id: int
     email: str
 
@@ -48,8 +46,8 @@ class UserResponse(BaseModel):
 # ── エンドポイント ────────────────────────────────────────────────────────────
 
 
-@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def register(body: RegisterRequest, db: Session = Depends(get_db)):
+@router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
+def register(body: RegisterRequest, response: Response, db: Session = Depends(get_db)):
     """
     新規ユーザー登録
 
@@ -73,22 +71,38 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
     db.refresh(user)
 
     token = create_access_token(user.id)
-    return TokenResponse(access_token=token, user_id=user.id, email=user.email)
+    response.set_cookie(
+        key="access_token",
+        value=token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=60 * 60 * 24,
+    )
+    return AuthResponse(user_id=user.id, email=user.email)
 
 
-@router.post("/login", response_model=TokenResponse)
-def login(body: LoginRequest, db: Session = Depends(get_db)):
+@router.post("/login", response_model=AuthResponse)
+def login(body: LoginRequest, response: Response, db: Session = Depends(get_db)):
     """
     ログイン
 
-    - email / password が一致すればJWTを返す
+    - email / password が一致すればhttpOnly CookieにJWTを発行する
     """
     user = db.query(User).filter(User.email == body.email).first()
     if user is None or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="メールアドレスまたはパスワードが正しくありません。")
 
     token = create_access_token(user.id)
-    return TokenResponse(access_token=token, user_id=user.id, email=user.email)
+    response.set_cookie(
+        key="access_token",
+        value=token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=60 * 60 * 24,
+    )
+    return AuthResponse(user_id=user.id, email=user.email)
 
 
 @router.get("/me", response_model=UserResponse)
