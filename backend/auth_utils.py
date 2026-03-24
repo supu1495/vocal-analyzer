@@ -6,6 +6,7 @@ JWT生成・検証、パスワードハッシュ化を担当する
 import os
 from datetime import datetime, timedelta, timezone
 
+import redis
 from fastapi import Cookie, Depends, HTTPException, status
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -18,7 +19,34 @@ SECRET_KEY = os.environ["SECRET_KEY"]
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24時間
 
+# ログイン失敗ロックアウト設定
+_MAX_FAILURES = 5         # この回数失敗するとロック
+_LOCKOUT_SECONDS = 60 * 15  # ロック持続時間: 15分
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_redis = redis.from_url(os.environ.get("REDIS_URL", "redis://redis:6379"))
+
+
+def check_lockout(email: str) -> None:
+    """ロック中なら 429 を raise する"""
+    count = _redis.get(f"login_fail:{email}")
+    if count and int(count) >= _MAX_FAILURES:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="ログイン試行回数が上限を超えました。15分後に再試行してください。",
+        )
+
+
+def record_login_failure(email: str) -> None:
+    """失敗カウントをインクリメントし、TTLを（再）セットする"""
+    key = f"login_fail:{email}"
+    _redis.incr(key)
+    _redis.expire(key, _LOCKOUT_SECONDS)
+
+
+def clear_lockout(email: str) -> None:
+    """ログイン成功時に失敗カウントを削除する"""
+    _redis.delete(f"login_fail:{email}")
 
 
 def hash_password(password: str) -> str:
