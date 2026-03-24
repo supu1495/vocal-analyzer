@@ -34,6 +34,7 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     # 声紋データ: 将来的にベクトルデータを格納するためJSONで保持
     voiceprint_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     disclaimer_accepted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
