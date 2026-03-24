@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-# 音声分析APIのルーターを登録
 from api.analysis import router as analysis_router
+from api.auth import router as auth_router
 
 app = FastAPI(
     title="vocal-analyzer API",
@@ -18,6 +18,7 @@ app.add_middleware(
 )
 
 # ルーターを登録
+app.include_router(auth_router)
 app.include_router(analysis_router)
 
 @app.get("/")
