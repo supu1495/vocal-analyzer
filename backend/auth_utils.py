@@ -6,8 +6,7 @@ JWT生成・検証、パスワードハッシュ化を担当する
 import os
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Cookie, Depends, HTTPException, status
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
@@ -20,7 +19,6 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24時間
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def hash_password(password: str) -> str:
@@ -52,32 +50,17 @@ def _decode_token(token: str) -> int:
 
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    access_token: str | None = Cookie(default=None),
     db: Session = Depends(get_db),
 ) -> User:
     """ログイン必須エンドポイント用 Dependency。未認証なら 401 を返す"""
-    if credentials is None:
+    if access_token is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="認証が必要です。",
-            headers={"WWW-Authenticate": "Bearer"},
         )
-    user_id = _decode_token(credentials.credentials)
+    user_id = _decode_token(access_token)
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="ユーザーが存在しません。")
     return user
-
-
-def get_optional_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    db: Session = Depends(get_db),
-) -> User | None:
-    """ログイン任意エンドポイント用 Dependency。未認証なら None を返す"""
-    if credentials is None:
-        return None
-    try:
-        user_id = _decode_token(credentials.credentials)
-    except HTTPException:
-        return None
-    return db.query(User).filter(User.id == user_id).first()
