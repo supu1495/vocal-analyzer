@@ -126,10 +126,14 @@ APIドキュメント: http://localhost:8000/docs
 
 | フェーズ | タスク | 状況 |
 |---|---|---|
-| Phase 1 | Docker環境構築、DB設計、認証機能 | 🔲 予定 |
-| Phase 2 | 音声処理エンジン（音源分離・ピッチ検出・技法検出） | 🔲 予定 |
-| Phase 3 | フロントエンド（アップロード画面・結果表示・統計ダッシュボード） | 🔲 予定 |
-| Phase 4 | テスト・本番環境デプロイ | 🔲 予定 |
+| Phase 1 | Docker環境構築（5サービス構成） | ✅ 完了 |
+| Phase 2 | 音声分析エンジン（Crepe・librosa・歌唱技法検出） | ✅ 完了 ※Demucsは非同期化まで一時スタブ |
+| Phase 3 | フロントエンド（アップロード・結果・ダッシュボード画面） | ✅ 完了 |
+| Phase 4 | DB連携（PostgreSQL・Alembicマイグレーション） | ✅ 完了 |
+| Phase 5 | 認証（JWT / httpOnly Cookie / Redisロックアウト） | ✅ 完了 |
+| Phase 6 | テスト（pytest・APIテスト） | 🔲 予定 |
+| Phase 7 | 非同期処理（Celery + RedisでDemucs本番復帰） | 🔲 予定 |
+| Phase 8 | 本番環境デプロイ | 🔲 予定 |
 
 ---
 
