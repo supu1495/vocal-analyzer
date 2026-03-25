@@ -78,6 +78,8 @@
 
 - **作業ブランチ**: `main`
 - **mainブランチ**: Phase 5まで全てマージ済み
+- **ローカル動作確認**: Docker Compose で全5サービス起動確認済み（2026-03-26）
+- **注意**: port 80 はホスト側の Apache が競合する場合あり。その場合は `http://localhost:5173` に直接アクセス
 
 ---
 
@@ -153,30 +155,16 @@ vocal-analyzer/
 ```
 ---
 ## 決定事項ログ
-### 2026-03-25 認証レビュー
-- JWT保存: localStorage → httpOnly Cookie に変更予定（未対応）
-- シークレットキー: デフォルト値を削除済み
-- ロックアウト: 次タスクで実装予定
-- エラーメッセージ: 合格、変更なし
-- JWT有効期限: ブラックリスト対応は次フェーズ
 
-### 2026-03-25 コード総ざらいレビュー
-
-#### 完了済み
-- JWT: httpOnly Cookie方式に変更済み
-- シークレットキー: docker-compose.ymlで${SECRET_KEY}参照に変更済み
+### 2026-03-25 認証レビュー → 全対応済み（2026-03-26）
+- JWT保存: localStorage → httpOnly Cookie に変更済み
+- シークレットキー: `docker-compose.yml` で `${SECRET_KEY}` 参照に変更済み
 - ロックアウト: Redis実装済み（5回失敗→15分ロック）
-- ログアウトエンドポイント: POST /api/v1/auth/logout 追加済み
+- ログアウトエンドポイント: `POST /api/v1/auth/logout` 実装済み
 - エラーメッセージ: 曖昧化済み（ユーザー列挙攻撃対策）
+- JWT有効期限: ブラックリスト対応は次フェーズ
+- `feature/AuthN` → `main` マージ済み
 
-#### 未対応・要修正
-- main.py: auth routerの登録が抜けている（最優先）
-- App.tsx: ログイン・登録画面が未反映（feature/AuthNの変更がmainに入っていない可能性）
-- analysis.py: get_current_userによるログイン必須化が未反映
-- Alembic: hashed_passwordカラム追加マイグレーション未実行
-- models.py: hashed_passwordフィールドがない
-
-#### 次にやること
-1. main.pyにauth routerを登録
-2. App.tsxのログイン画面をfeature/AuthNから確認・反映
-3. Alembicマイグレーション実行
+### 2026-03-26 起動時バグ修正
+- `requirements.txt`: `pydantic==2.5.3` → `pydantic[email]==2.5.3`
+  - `EmailStr` 使用時に `email-validator` が必要なため
