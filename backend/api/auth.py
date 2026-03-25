@@ -120,3 +120,9 @@ def me(current_user: User = Depends(get_current_user)):
         email=current_user.email,
         disclaimer_accepted=current_user.disclaimer_accepted,
     )
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(response: Response):
+    """ログアウト — httpOnly CookieのJWTを削除する"""
+    response.delete_cookie(key="access_token")

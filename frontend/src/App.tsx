@@ -409,7 +409,7 @@ function DashboardScreen({ latestResult, onBack }: {
       .then((data: Statistics) => setStats(data))
       .catch(e => setError(e instanceof Error ? e.message : '統計の取得に失敗しました'))
       .finally(() => setLoading(false))
-  }, [token])
+  }, [])
 
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto', padding: '40px 20px' }}>
@@ -510,9 +510,12 @@ export default function App() {
   }
 
   const handleLogout = () => {
-    setAuth(null)
-    setAnalysisResult(null)
-    setScreen('login')
+    fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' })
+      .finally(() => {
+        setAuth(null)
+        setAnalysisResult(null)
+        setScreen('login')
+      })
   }
 
   const handleResult = (r: AnalysisResult) => {

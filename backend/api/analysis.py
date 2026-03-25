@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
 from audio.analyzer import AudioAnalyzer
-from auth_utils import get_current_user, get_optional_user
+from auth_utils import get_current_user
 from database import get_db
 from models import AnalysisResult, User
 
@@ -25,7 +25,7 @@ async def upload_audio(
     song_title: str = "",
     artist_name: str = "",
     db: Session = Depends(get_db),
-    current_user: User | None = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     音声ファイルをアップロードして分析し、結果をDBに保存する
