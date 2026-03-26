@@ -8,6 +8,7 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from auth_utils import (
+    DUMMY_HASH,
     check_lockout,
     clear_lockout,
     create_access_token,
@@ -95,7 +96,12 @@ def login(body: LoginRequest, response: Response, db: Session = Depends(get_db))
     check_lockout(body.email)
 
     user = db.query(User).filter(User.email == body.email).first()
-    if user is None or not verify_password(body.password, user.hashed_password):
+    # タイミング攻撃対策: ユーザーが存在しない場合もダミーハッシュで verify を実行し、
+    # レスポンス時間の差からメールアドレスの存在を推測されないようにする
+    hash_to_check = user.hashed_password if user is not None else DUMMY_HASH
+    password_valid = verify_password(body.password, hash_to_check)
+
+    if not password_valid or user is None:
         record_login_failure(body.email)
         raise HTTPException(status_code=401, detail="メールアドレスまたはパスワードが正しくありません。")
 

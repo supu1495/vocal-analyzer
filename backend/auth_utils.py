@@ -26,6 +26,18 @@ _LOCKOUT_SECONDS = 60 * 15  # ロック持続時間: 15分
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 _redis = redis.from_url(os.environ.get("REDIS_URL", "redis://redis:6379"))
 
+# タイミング攻撃対策: ユーザーが存在しない場合でも verify_password を実行するためのダミーハッシュ
+# モジュールロード時に1回だけ生成する
+DUMMY_HASH = pwd_context.hash("dummy")
+
+# INCR と EXPIRE を atomic に実行する Lua スクリプト
+# INCR と EXPIRE の間にクラッシュが発生しても TTL が失われない
+_INCR_WITH_EXPIRE_LUA = """
+local current = redis.call('INCR', KEYS[1])
+redis.call('EXPIRE', KEYS[1], ARGV[1])
+return current
+"""
+
 
 def check_lockout(email: str) -> None:
     """ロック中なら 429 を raise する"""
@@ -38,10 +50,9 @@ def check_lockout(email: str) -> None:
 
 
 def record_login_failure(email: str) -> None:
-    """失敗カウントをインクリメントし、TTLを（再）セットする"""
+    """失敗カウントをインクリメントし、TTLを atomic にセットする"""
     key = f"login_fail:{email}"
-    _redis.incr(key)
-    _redis.expire(key, _LOCKOUT_SECONDS)
+    _redis.eval(_INCR_WITH_EXPIRE_LUA, 1, key, _LOCKOUT_SECONDS)
 
 
 def clear_lockout(email: str) -> None:
