@@ -106,7 +106,7 @@ docker compose up --build
 | Phase 4 | DB連携（PostgreSQL・Alembic） | ✅ 完了 |
 | Phase 5 | 認証（JWT / httpOnly Cookie / Redisロックアウト） | ✅ 完了 |
 | Phase 6 | テスト（pytest・APIテスト） | 🔲 予定 |
-| Phase 7 | 音声分析コア実装（技法検出・リズム・声域・フィードバック） | 🔲 予定 |
+| Phase 7 | 音声分析コア実装（技法検出・リズム・声域・スコアマトリクス・フィードバック） | 🔲 予定 |
 | Phase 8 | 非同期処理（Celery + Demucs本番復帰） | 🔲 予定 |
 | Phase 9 | 本番環境デプロイ | 🔲 予定 |
 
