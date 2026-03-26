@@ -88,15 +88,22 @@ def get_user_statistics(
 
 
 @router.get("/{analysis_id}")
-def get_analysis(analysis_id: int, db: Session = Depends(get_db)):
+def get_analysis(
+    analysis_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     指定IDの分析結果を取得する
 
     - analysis_id: アップロード時に返されたID
+    - ログインユーザー自身の分析結果のみ取得可能
     """
     result = db.query(AnalysisResult).filter(AnalysisResult.id == analysis_id).first()
     if result is None:
         raise HTTPException(status_code=404, detail="分析結果が見つかりません。")
+    if result.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="この分析結果へのアクセス権限がありません。")
 
     return {
         "analysis_id": result.id,
