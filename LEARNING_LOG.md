@@ -4,9 +4,7 @@ Claude Codeと進めた学習の記録。コードの理解・疑問・気づき
 
 ---
 
-## 2026-03-26
-
-### `.claude/settings.local.json` — Claude Codeの権限設定ファイル
+## `.claude/settings.local.json` — Claude Codeの権限設定ファイル
 
 Claude Codeがコマンドを実行するとき、デフォルトでは毎回「許可しますか？」と確認を求めてくる。このファイルに書いたコマンドは確認なしで自動実行される。
 
@@ -18,7 +16,7 @@ Claude Codeがコマンドを実行するとき、デフォルトでは毎回「
 - Q: `.gitignore`に入れた方がいい？
 - A: チーム開発なら入れるべき（個人設定を他人に押しつけない）。1人で複数マシンを使う場合はgitで共有してOK
 
-### `main.py` — アプリの入口
+## `main.py` — アプリの入口
 
 FastAPIはPythonのフレームワーク。フレームワークとは「よく使う機能をまとめた土台」で、URLの解析・エラー処理・ドキュメント生成などが最初から揃っている。APIとはアプリ同士が決められた形式で情報をやり取りするための窓口のこと。
 
@@ -49,7 +47,7 @@ CORSMiddlewareはFastAPIが提供するクラス。CORS（Cross-Origin Resource 
 - Q: `allow_credentials=True`が必要な理由は？
 - A: CookieはデフォルトでCORSリクエスト（別サーバーへのリクエスト）に自動送信されない。TrueにすることでフロントエンドからのリクエストにCookieが自動でついてくる
 
-### `database.py` — DB接続設定
+## `database.py` — DB接続設定
 
 `os.environ`はOS上で設定されている環境変数の一覧。`os.environ["DATABASE_URL"]`のようにキー名で値を取り出せる。コードに直接URLやパスワードを書くとGitHubに上げたとき誰でも見えてしまうため、コードと設定値を分離する目的で使う。`docker-compose.yml`に書いた値がコンテナ起動時に環境変数としてセットされ、ここで取り出される。
 
@@ -121,7 +119,7 @@ eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.xxxxx
 - Q: 429エラーの意味はどこかに書いてある？デバッグが不安
 - A: 429 = Too Many Requests（リクエスト過多）。コメントに補足を追記した。`detail`フィールドのメッセージがAPIレスポンスに含まれるのでデバッグ時はそちらで確認できる
 
-### `models.py` — DBのテーブル定義
+## `models.py` — DBのテーブル定義
 
 `database.py`で作った`Base`を継承して実際のテーブルをPythonのクラスとして定義するファイル。`users`テーブルと`analysis_results`テーブルの2つがある。
 
