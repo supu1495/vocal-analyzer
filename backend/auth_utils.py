@@ -40,7 +40,9 @@ return current
 
 
 def check_lockout(email: str) -> None:
-    """ロック中なら 429 を raise する"""
+    """ログイン失敗が規定回数（5回）に達している場合、リクエストを拒否して429エラーを返す
+    429 = Too Many Requests（リクエスト過多）を意味するHTTPステータスコード
+    """
     count = _redis.get(f"login_fail:{email}")
     if count and int(count) >= _MAX_FAILURES:
         raise HTTPException(

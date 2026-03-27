@@ -34,9 +34,11 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    # bcryptでハッシュ化したパスワード（生のパスワードは保存しない）
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     # 声紋データ: 将来的にベクトルデータを格納するためJSONで保持
     voiceprint_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # 利用規約・免責事項への同意フラグ（登録時にTrueにする）
     disclaimer_accepted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=now_utc
