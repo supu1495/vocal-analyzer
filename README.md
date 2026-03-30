@@ -15,6 +15,11 @@
 - **分析結果の保存** — 結果のみPostgreSQLに保存（音声ファイルは即時削除）
 - **統計ダッシュボード** — 過去の分析結果の推移を可視化
 
+<img width="578" height="910" alt="image" src="https://github.com/user-attachments/assets/2e08625c-5cfc-4eae-abdb-68982ac3a343" />
+<img width="570" height="691" alt="image" src="https://github.com/user-attachments/assets/90ab8289-b3c4-464c-a071-1bfbfc0e6315" />
+
+
+
 ## 開発予定の機能
 
 - **歌唱技法の検出** — ビブラート・こぶし・フォール・しゃくり・ロングトーンの自動評価
