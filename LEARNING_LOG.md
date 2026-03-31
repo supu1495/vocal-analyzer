@@ -199,6 +199,72 @@ server: {
 
 ---
 
+## `backend/api/auth.py` — 認証APIエンドポイント
+
+### JSON・パース・Pydantic・BaseModel
+
+フロントエンドがバックエンドにデータを送るとき、次のような形式のテキストで送る。これが JSON。
+
+```json
+{ "email": "test@example.com", "password": "mypassword" }
+```
+
+「パース」とはこのテキストを読み解いて、Python が使えるデータに変換する操作のこと。JSON はただの文字列なので、そのままでは `email` や `password` を取り出せない。
+
+Pydantic はパースとバリデーション（形式チェック）を自動でやってくれるライブラリ。`BaseModel` はその基底クラスで、継承したクラスを定義するだけでJSON の自動変換と入力チェックが使えるようになる。
+
+```python
+class RegisterRequest(BaseModel):
+    email: EmailStr   # @がなければ自動でエラー
+    password: str
+```
+
+FastAPI がリクエストを受け取ると JSON をこのクラスに変換し、以降は `body.email`・`body.password` でアクセスできる。
+
+スキーマは入出力の役割で分かれている。
+- `RegisterRequest` / `LoginRequest` — リクエスト（受け取るデータ）用
+- `AuthResponse` — 登録・ログイン成功時のレスポンス用
+- `UserResponse` — `/me` エンドポイントのレスポンス用（`disclaimer_accepted` が追加）
+
+### `raise HTTPException` と `return` の違い
+
+`return` は正常終了して値を返す。`raise` はエラーを発生させてそこで処理を中断する。`raise` した後の行は実行されない。
+
+`HTTPException` は FastAPI が提供するエラー用クラス。`status_code` で HTTP ステータスコード、`detail` でエラーメッセージを指定する。この2つはただの引数なので `HTTPException` に渡すことで初めて「HTTPエラーレスポンスを返す」という意味を持つ。
+
+```python
+raise HTTPException(status_code=400, detail="パスワードは8文字以上で設定してください。")
+```
+
+### `disclaimer_accepted` とは
+
+「免責事項・利用規約への同意フラグ」。サービス登録時に「利用規約に同意します」のチェックボックスに相当する。登録直後は同意画面をまだ見ていないため `False` で作り、将来同意画面を実装した際に `True` に更新する想定。
+
+### `password_valid` とは
+
+`verify_password` 関数が返す `True`/`False` を受け取る変数。「パスワードが有効か？」という意味。`True`/`False` を入れる変数には「〜は有効か？」「〜は正しいか？」という名前をつけるのが一般的。
+
+### エンドポイントの全体像
+
+| エンドポイント | 処理 |
+|---|---|
+| `POST /register` | ユーザー作成 → JWT を Cookie にセット → `201 Created` |
+| `POST /login` | ロックアウト確認 → パスワード照合 → JWT を Cookie にセット |
+| `GET /me` | Cookie の JWT を検証 → ログイン中ユーザー情報を返す |
+| `POST /logout` | Cookie を削除 → `204 No Content` |
+
+`response_model=AuthResponse` を指定すると、`User` モデルにある `hashed_password` など定義外のフィールドはレスポンスから自動除外される。パスワードが外部に漏れない仕組み。
+
+`db.refresh(user)` は commit 後に DB から最新状態（自動採番された `id` など）を読み直す命令。commit するまで `user.id` が None のため必要。
+
+ログアウトボタンをクリックすると `POST /api/v1/auth/logout` が送信され、このエンドポイントが Cookie を削除する。以降のリクエストには JWT が付かなくなりログアウト完了。
+
+**疑問と回答:**
+- Q: `HTTPException` がないと `status_code` と `detail` を書いてもうまく作動しない？
+- A: そう。2つはただの引数で、`HTTPException` に渡すことで初めて「HTTPエラーレスポンスを返す」という動作になる
+
+---
+
 ## `git merge` — マージコミットとnanoエディタ
 
 `git merge`を実行すると、Gitは「なぜマージするか」を記録するためのマージコミットを作成する。
