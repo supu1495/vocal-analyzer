@@ -69,11 +69,11 @@ def get_user_statistics(
 
     history = [
         {
-            "date": r.created_at.strftime("%m/%d"),
-            "pitch": round(r.pitch_accuracy) if r.pitch_accuracy is not None else 0,
-            "rhythm": round(r.rhythm_score) if r.rhythm_score is not None else 0,
+            "date": record.created_at.strftime("%m/%d"),
+            "pitch": round(record.pitch_accuracy) if record.pitch_accuracy is not None else 0,
+            "rhythm": round(record.rhythm_score) if record.rhythm_score is not None else 0,
         }
-        for r in results
+        for record in results
     ]
 
     pitch_values = [h["pitch"] for h in history]
