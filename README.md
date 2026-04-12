@@ -15,8 +15,9 @@
 - **分析結果の保存** — 結果のみPostgreSQLに保存（音声ファイルは即時削除）
 - **統計ダッシュボード** — 過去の分析結果の推移を可視化
 
-<img width="578" height="910" alt="image" src="https://github.com/user-attachments/assets/2e08625c-5cfc-4eae-abdb-68982ac3a343" />
-<img width="570" height="691" alt="image" src="https://github.com/user-attachments/assets/90ab8289-b3c4-464c-a071-1bfbfc0e6315" />
+<img width="452" height="713" alt="image" src="https://github.com/user-attachments/assets/a11b8a8d-b3d4-4a89-9a98-d4728322545e" />
+<img width="662" height="920" alt="image" src="https://github.com/user-attachments/assets/88c96efe-8fb9-4565-b3ef-e535d099c67b" />
+<img width="660" height="732" alt="image" src="https://github.com/user-attachments/assets/818e22c1-31f9-436c-88cf-49c85c42816f" />
 
 
 
