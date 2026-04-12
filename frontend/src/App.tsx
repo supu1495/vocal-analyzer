@@ -454,7 +454,7 @@ export default function App() {
           onClick={() => setScreen('upload')}
           style={{ color: '#c084fc', fontWeight: '800', fontSize: '16px', cursor: 'pointer', letterSpacing: '0.05em' }}
         >
-          ◈ VOCAL AI
+          ◈ VOCAL ANALYSIS
         </span>
         <nav style={{ display: 'flex', gap: '8px' }}>
           {[
