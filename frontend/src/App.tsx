@@ -532,7 +532,7 @@ export default function App() {
           onClick={() => auth && setScreen('upload')}
           style={{ color: '#c084fc', fontWeight: '800', fontSize: '16px', cursor: auth ? 'pointer' : 'default', letterSpacing: '0.05em' }}
         >
-          ◈ VOCAL AI
+          ◈ VOCAL ANALYSIS
         </span>
 
         {auth && !isAuthScreen ? (
