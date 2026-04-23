@@ -36,12 +36,14 @@ class TechniqueDetector:
             {
                 "count": 検出回数,
                 "avg_frequency": 平均周波数（Hz）,
-                "avg_depth": 平均深さ（cent）
+                "avg_depth": 平均深さ（cent）,
+                "gratuitous_count": 加点目的と判定されたビブラートの回数
             }
         """
         # TODO: ピッチの周期的変動をFFTで検出する
-        
-        return {"count": 0, "avg_frequency": 0.0, "avg_depth": 0.0}
+        # TODO: gratuitous_count — 間奏など旋律のない区間（ピッチ変化がほぼゼロの無声区間）で発生したビブラートをカウントする
+        #       歌唱中のビブラートはアレンジとして加点。旋律のない区間でのビブラートのみ減点対象とする
+        return {"count": 0, "avg_frequency": 0.0, "avg_depth": 0.0, "gratuitous_count": 0}
 
     def detect_kobushi(self, pitch_data: dict) -> dict:
         """
