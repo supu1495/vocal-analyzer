@@ -35,6 +35,12 @@ interface Statistics {
   growth_rate: number
 }
 
+// --- ユーティリティ ---
+
+function calcTotalScore(pitchAccuracy: number, rhythmScore: number): number {
+  return Math.round((pitchAccuracy + rhythmScore) / 2)
+}
+
 // --- UIパーツ ---
 
 function ScoreRing({ score, label, color }: { score: number; label: string; color: string }) {
@@ -84,7 +90,7 @@ function TechniqueBar({ label, value, max, color }: { label: string; value: numb
 function LineChart({ data }: { data: Statistics['history'] }) {
   const w = 340; const h = 100; const pad = 20
   const maxVal = 100
-  const xs = data.map((_, i) => pad + (i / (data.length - 1)) * (w - pad * 2))
+  const xs = data.map((_, i) => pad + (data.length > 1 ? i / (data.length - 1) : 0.5) * (w - pad * 2))
   const yPitch = data.map(d => h - pad - ((d.pitch / maxVal) * (h - pad * 2)))
   const yRhythm = data.map(d => h - pad - ((d.rhythm / maxVal) * (h - pad * 2)))
   const toPath = (ys: number[]) =>
@@ -339,8 +345,8 @@ function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
 function ResultScreen({ result, onBack, onDashboard }: {
   result: AnalysisResult; onBack: () => void; onDashboard: () => void
 }) {
-  const r = result.result
-  const t = r.techniques
+  const scores = result.result
+  const techniques = scores.techniques
   return (
     <div style={{ maxWidth: '600px', margin: '0 auto', padding: '40px 20px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
@@ -359,30 +365,30 @@ function ResultScreen({ result, onBack, onDashboard }: {
         border: '1px solid rgba(192,132,252,0.2)', borderRadius: '16px', padding: '32px', marginBottom: '20px',
         display: 'flex', justifyContent: 'space-around', alignItems: 'center'
       }}>
-        <ScoreRing score={r.pitch_accuracy} label="ピッチ精度" color="#c084fc" />
+        <ScoreRing score={scores.pitch_accuracy} label="ピッチ精度" color="#c084fc" />
         <div style={{ textAlign: 'center' }}>
           <div style={{ color: '#555', fontSize: '24px', marginBottom: '8px' }}>✦</div>
           <p style={{ color: '#888', fontSize: '11px', letterSpacing: '0.1em' }}>総合評価</p>
           <p style={{ color: 'white', fontSize: '28px', fontWeight: '800' }}>
-            {Math.round((r.pitch_accuracy + r.rhythm_score) / 2)}
+            {calcTotalScore(scores.pitch_accuracy, scores.rhythm_score)}
           </p>
         </div>
-        <ScoreRing score={r.rhythm_score} label="リズム感" color="#34d399" />
+        <ScoreRing score={scores.rhythm_score} label="リズム感" color="#34d399" />
       </div>
 
       <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid #1e1e2e', borderRadius: '16px', padding: '24px', marginBottom: '20px' }}>
         <p style={{ color: '#888', fontSize: '11px', letterSpacing: '0.15em', marginBottom: '20px' }}>TECHNIQUES</p>
-        <TechniqueBar label="ビブラート" value={t.vibrato.count} max={20} color="#c084fc" />
-        <TechniqueBar label="こぶし" value={t.kobushi.count} max={20} color="#f472b6" />
-        <TechniqueBar label="フォール" value={t.fall.count} max={20} color="#60a5fa" />
-        <TechniqueBar label="しゃくり" value={t.shakuri.count} max={20} color="#fb923c" />
-        <TechniqueBar label="ロングトーン" value={t.long_tone.count} max={20} color="#34d399" />
+        <TechniqueBar label="ビブラート" value={techniques.vibrato.count} max={20} color="#c084fc" />
+        <TechniqueBar label="こぶし" value={techniques.kobushi.count} max={20} color="#f472b6" />
+        <TechniqueBar label="フォール" value={techniques.fall.count} max={20} color="#60a5fa" />
+        <TechniqueBar label="しゃくり" value={techniques.shakuri.count} max={20} color="#fb923c" />
+        <TechniqueBar label="ロングトーン" value={techniques.long_tone.count} max={20} color="#34d399" />
       </div>
 
-      {r.feedback && (
+      {scores.feedback && (
         <div style={{ background: 'rgba(192,132,252,0.05)', border: '1px solid rgba(192,132,252,0.15)', borderRadius: '16px', padding: '20px', marginBottom: '20px' }}>
           <p style={{ color: '#c084fc', fontSize: '11px', letterSpacing: '0.15em', marginBottom: '10px' }}>FEEDBACK</p>
-          <p style={{ color: '#ccc', fontSize: '14px', lineHeight: '1.6' }}>{r.feedback}</p>
+          <p style={{ color: '#ccc', fontSize: '14px', lineHeight: '1.6' }}>{scores.feedback}</p>
         </div>
       )}
 
@@ -454,7 +460,7 @@ function DashboardScreen({ latestResult, onBack }: {
             {[
               { label: 'ピッチ精度', value: Math.round(latestResult.result.pitch_accuracy), color: '#c084fc' },
               { label: 'リズム感', value: Math.round(latestResult.result.rhythm_score), color: '#34d399' },
-              { label: '総合', value: Math.round((latestResult.result.pitch_accuracy + latestResult.result.rhythm_score) / 2), color: '#60a5fa' },
+              { label: '総合', value: calcTotalScore(latestResult.result.pitch_accuracy, latestResult.result.rhythm_score), color: '#60a5fa' },
             ].map(({ label, value, color }) => (
               <div key={label} style={{ textAlign: 'center' }}>
                 <p style={{ color, fontSize: '28px', fontWeight: '800', marginBottom: '4px' }}>{value}</p>
@@ -469,7 +475,7 @@ function DashboardScreen({ latestResult, onBack }: {
         {[
           { label: '総分析回数', value: stats?.total_count ?? '-', unit: '回' },
           { label: '最高ピッチ', value: stats?.best_pitch ?? '-', unit: 'pt' },
-          { label: '成長率', value: stats ? `+${stats.growth_rate}` : '-', unit: '%' },
+          { label: '成長率', value: stats ? (stats.growth_rate >= 0 ? `+${stats.growth_rate}` : `${stats.growth_rate}`) : '-', unit: '%' },
         ].map(({ label, value, unit }) => (
           <div key={label} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid #1e1e2e', borderRadius: '12px', padding: '16px', textAlign: 'center' }}>
             <p style={{ color: 'white', fontSize: '22px', fontWeight: '800', marginBottom: '4px' }}>
@@ -518,8 +524,8 @@ export default function App() {
       })
   }
 
-  const handleResult = (r: AnalysisResult) => {
-    setAnalysisResult(r)
+  const handleResult = (result: AnalysisResult) => {
+    setAnalysisResult(result)
     setScreen('result')
   }
 

@@ -1289,3 +1289,430 @@ DEBUG < INFO < WARN < ERROR
 ```
 
 `techniques.py` がその「別途追加」の担当。
+
+---
+
+## `frontend/src/App.tsx` — 全画面のReactコンポーネント
+
+### ファイル全体の構造
+
+```
+App.tsx
+├── 型定義（4つ）
+│   ├── Screen               — 画面の名前の一覧
+│   ├── AuthState            — ログイン中ユーザーの情報
+│   ├── AnalysisResult       — 分析結果の形
+│   └── Statistics           — 統計情報の形
+│
+├── UIパーツ（再利用できる小さな部品）
+│   ├── ScoreRing            — 円グラフ風のスコア表示
+│   ├── TechniqueBar         — 歌唱技法の棒グラフ
+│   └── LineChart            — 推移折れ線グラフ
+│
+├── 画面コンポーネント（画面単位の大きな部品）
+│   ├── AuthScreen           — ログイン / 登録画面（共通）
+│   ├── UploadScreen         — 音声アップロード画面
+│   ├── ResultScreen         — 分析結果画面
+│   └── DashboardScreen      — 統計ダッシュボード画面
+│
+└── App（メイン）
+    — 全画面を束ねて「今どの画面を表示するか」を管理する親
+```
+
+---
+
+### 型定義
+
+**`type Screen`**
+
+```typescript
+type Screen = 'login' | 'register' | 'upload' | 'result' | 'dashboard'
+```
+
+`|` は「または」。`Screen` 型はこの5つの文字列のどれか、という意味。これ以外の文字列を代入しようとするとTypeScriptがエラーを出してくれる。
+
+**`interface`**
+
+オブジェクトの形（プロパティ名と型）を定義するTypeScriptの構文。Pythonの `dataclass` や Pydantic の `BaseModel` に近い概念。
+
+```typescript
+interface AuthState {
+  userId: number   // 数値
+  email: string    // 文字列
+}
+```
+
+**`?`（オプショナル）**
+
+`song_title?: string` の `?` は「あってもなくてもいい」という意味。バックエンドが返さない場合でもエラーにならない。
+
+**ネスト（入れ子）**
+
+オブジェクトの中にオブジェクトが入っている状態。`AnalysisResult` は `result` の中に `techniques` があり、さらに中に `vibrato` などがある。バックエンドが返すJSONの形と合わせることでTypeScriptが補完・型チェックをしてくれる。
+
+---
+
+### `useState` とセッター
+
+`useState` は「この変数が変わったら画面を再描画して」という仕組み。
+
+```typescript
+const [email, setEmail] = useState('')
+```
+
+React が管理している値と、その値を更新する専用関数のペア。値を変えるときは必ずセッター（`setEmail`）を使う。直接代入しても React は変化を検知できないため画面が更新されない。
+
+```typescript
+email = 'test@example.com'    // NG: React が気づかない → 画面そのまま
+setEmail('test@example.com')  // OK: React に通知 → 画面が更新される
+```
+
+---
+
+### `===` と真偽値への変換
+
+```typescript
+const isLogin = mode === 'login'
+```
+
+`===` は「完全に等しいか」を比較する演算子。結果は `true` か `false`。
+
+```
+mode = 'login'    → true
+mode = 'register' → false
+```
+
+同じ条件を複数箇所で使うとき、一度変数に入れておくとすっきりする（リーダブルコード）。
+
+---
+
+### `!` 演算子と空文字
+
+`!` は「ではない」。JavaScriptでは空文字 `''` は `false` 扱いなので：
+
+```typescript
+!''   → true  （未入力）
+!'a'  → false （入力あり）
+```
+
+`if (!email || !password)` は「email か password が空なら」という条件。
+
+---
+
+### `??` 演算子（Nullish Coalescing）
+
+```typescript
+data.detail ?? 'エラーが発生しました。'
+```
+
+左側が `null` または `undefined` なら右側を使う演算子。バックエンドがエラーメッセージ（`detail`）を返してくれたらそれを表示し、返してくれなかったら汎用メッセージを表示する。
+
+---
+
+### UIパーツ — ScoreRing
+
+コンポーネントとは「画面の部品を関数として書いたもの」。`props` は外から渡す引数。
+
+```typescript
+<ScoreRing score={75} label="ピッチ精度" color="#c084fc" />
+```
+
+SVGの `strokeDasharray` / `strokeDashoffset` という仕組みで円グラフを表現する。円周全体を破線として描き、スコアに応じた長さだけ色をつける。残りは透明にする。
+
+```typescript
+const circ = 2 * Math.PI * r       // 円周の長さ（2πr）
+const offset = circ - (score / 100) * circ  // 透明にする部分の長さ
+```
+
+---
+
+### UIパーツ — TechniqueBar
+
+三項演算子で0除算を防ぎつつ、0〜100の割合を計算してCSSの `width: ${pct}%` で棒グラフの長さを表現する。
+
+```typescript
+const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0
+// max===0 → 0（ゼロ除算防止）
+// Math.min(..., 100) → 100を超えたら100に丸める
+```
+
+---
+
+### UIパーツ — LineChart
+
+`map` はPythonのリスト内包表記と同じ概念。配列の全要素を変換する。
+
+```typescript
+data.map((_, i) => ...)
+// _ → 値は使わない（添字だけ必要）という慣習
+// i → インデックス（0, 1, 2, ...）
+```
+
+`toPath` 関数はSVGのパス文字列を作る。`M` は「移動（Move）」、`L` は「線を引く（Line）」。
+
+---
+
+### AuthScreen — ログイン・登録画面
+
+props が3つ。`onSuccess` と `onToggle` は「関数を渡す」props。
+
+| props | 役割 |
+|---|---|
+| `mode` | `'login'` か `'register'` か |
+| `onSuccess` | ログイン・登録成功時に呼ぶ関数 |
+| `onToggle` | 「新規登録」「ログイン」切替ボタン押下時に呼ぶ関数 |
+
+`onSuccess: (auth: AuthState) => void` は「`AuthState` を受け取って何も返さない関数」という型。Pythonで言うと `Callable[[AuthState], None]` に相当。
+
+**handleSubmit の処理フロー：**
+
+```
+① setError('') でエラーをリセット
+② 未入力チェック → 空なら return で中断
+③ 登録時のみパスワード長さチェック
+④ setLoading(true) でボタンを「処理中」に
+⑤ fetch() で API を呼ぶ（credentials: 'include' で Cookie を送受信）
+⑥ 成功 → onSuccess() で親に通知
+⑦ finally で setLoading(false)（成功・失敗どちらでも解除）
+```
+
+---
+
+**バグ修正：データが1件のときのゼロ除算**
+
+`data.length - 1` が `0` になり `i / 0 = NaN` でグラフが壊れる問題を修正。
+
+```typescript
+// 修正後
+const xs = data.map((_, i) => pad + (data.length > 1 ? i / (data.length - 1) : 0.5) * (w - pad * 2))
+// データ1件のときは中央（0.5）に配置
+```
+
+---
+
+### UploadScreen（236〜340行目）
+
+**役割：** 音声ファイルをドラッグ&ドロップまたはクリックで選択してバックエンドに送るUI。
+
+**props と state**
+
+```typescript
+function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void })
+```
+
+- props は1つ：分析完了したら呼ぶ `onResult` 関数
+- state は5つ：`dragging`（ドラッグ中か）、`file`（選択済みファイル）、`songTitle`、`artistName`、`loading`、`error`
+
+**`handleFile`（244〜248行目）**
+
+```typescript
+const handleFile = (f: File) => {
+  const allowed = ['audio/wav', 'audio/mpeg', 'audio/mp4', 'audio/x-m4a']
+  if (!allowed.includes(f.type)) { setError('WAV / MP3 / M4A のみ対応しています'); return }
+  setFile(f); setError('')
+}
+```
+
+- `File` はブラウザが用意している型。`f.name`・`f.type`・`f.size` などのプロパティを持つ
+- `f.type` はMIMEタイプ。ブラウザがファイル選択時に自動でセットする
+- `.includes()` は「配列にその値が含まれるか」を返すメソッド
+- 不正なMIMEタイプならエラーをセットして `return` で中断。以降の `setFile` は実行されない
+
+**`handleDrop`（250〜253行目）**
+
+```typescript
+const handleDrop = (e: React.DragEvent) => {
+  e.preventDefault(); setDragging(false)
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0])
+}
+```
+
+- `e.preventDefault()` — ブラウザのデフォルト動作（ドロップしたファイルを別タブで開く）をキャンセルする
+- `e.dataTransfer.files` — ドロップされたファイルの一覧。`[0]` で先頭1件を取る
+
+**`handleSubmit`（255〜271行目）**
+
+```typescript
+const form = new FormData()
+form.append('audio_file', file)
+const url = `/api/v1/analysis/upload?song_title=...&artist_name=...`
+const res = await fetch(url, { method: 'POST', credentials: 'include', body: form })
+```
+
+- `FormData` — ファイルをHTTPで送るためのオブジェクト。音声ファイルのようなバイナリデータはJSONで送れないため使う
+- `form.append('audio_file', file)` — バックエンドの `audio_file: UploadFile = File(...)` と名前を合わせる必要がある
+- `song_title` / `artist_name` はテキストなのでURLのクエリパラメータとして送る
+- `encodeURIComponent()` — URLで使えない文字（スペース・日本語など）を安全な形式に変換するブラウザ組み込み関数（例: `'Mrs. GREEN APPLE'` → `'Mrs.%20GREEN%20APPLE'`）
+
+**UIのドロップゾーンの色切り替え（289行目）**
+
+```typescript
+border: `2px dashed ${dragging ? '#c084fc' : file ? '#34d399' : '#2a2a3e'}`,
+```
+
+三項演算子を入れ子にして3パターンの色を切り替える：
+- ドラッグ中 → 紫
+- ファイル選択済み → 緑
+- 何もなし → グレー
+
+**楽曲名・アーティスト入力欄（311〜325行目）**
+
+同じ構造の入力欄が2つあるので、データを配列にまとめて `map` で展開している。Reactでリストを描画するとき `key` が必要で、Reactが「どの要素が変わったか」を追跡するために使う。
+
+---
+
+### ResultScreen（345〜400行目）
+
+**役割：** 分析完了した結果を表示する画面。
+
+**props**
+
+| props | 型 | 役割 |
+|---|---|---|
+| `result` | `AnalysisResult` | 分析結果データ |
+| `onBack` | `() => void` | 「戻る」ボタン押下時に呼ぶ関数 |
+| `onDashboard` | `() => void` | 「ダッシュボードを見る」ボタン押下時に呼ぶ関数 |
+
+`() => void` は「引数なし・戻り値なし」の関数型。
+
+**`onBack` の命名慣例**
+
+Reactには `onClick`・`onChange` のようにブラウザイベントに `on` をつける命名がある。自作コンポーネントでも「何かが起きたときに呼ばれる関数」には `on〇〇` という名前をつけるのが慣例。`ResultScreen` はただ「戻るが押された」と親（App）に伝えるだけで、どう動くかは親が決める。
+
+**変数への展開（348〜350行目）**
+
+```typescript
+const scores = result.result
+const techniques = scores.techniques
+```
+
+`result.result.techniques.vibrato.count` と毎回書くより短い変数に入れておくことで読みやすくなる。リーダブルコードの考え方。
+
+**フィードバック欄の条件描画（388〜393行目）**
+
+```typescript
+{scores.feedback && <div>...</div>}
+```
+
+`&&` の短絡評価：左が `undefined` / 空文字なら何も描画されない。`feedback` が `undefined` のときに安全に何も表示しない書き方。
+
+---
+
+### DashboardScreen（405〜490行目）
+
+**役割：** 統計情報をAPIから取得して表示する画面。唯一 `useEffect` でデータ取得を行うコンポーネント。
+
+**`useEffect` でのデータ取得（412〜418行目）**
+
+```typescript
+useEffect(() => {
+  fetch('/api/v1/analysis/user/statistics', { credentials: 'include' })
+    .then(res => { if (!res.ok) throw new Error(...); return res.json() })
+    .then((data: Statistics) => setStats(data))
+    .catch(e => setError(...))
+    .finally(() => setLoading(false))
+}, [])
+```
+
+- `useEffect` の第2引数 `[]` — 「依存なし＝最初の1回だけ実行」という意味。コンポーネントが画面に表示されたタイミングで自動実行される
+- `.then()` / `.catch()` / `.finally()` のチェーンは `async/await` + `try/catch/finally` と同じことをしている。書き方が違うだけ
+
+**条件分岐による表示切り替え（430〜454行目）**
+
+```typescript
+{loading && <p>読み込み中...</p>}
+{error && <p>{error}</p>}
+{stats && stats.history.length > 0 && <LineChart />}          // データあり
+{stats && stats.history.length === 0 && !loading && <p>...</p>} // データなし
+```
+
+`&&` の短絡評価を組み合わせて「ローディング中」「エラー」「データあり」「データなし」の4パターンを表示し分ける。
+
+**`?.` と `??` の組み合わせ（476〜478行目）**
+
+```typescript
+stats?.total_count ?? '-'
+```
+
+- `?.`（オプショナルチェーン）— `stats` が `null` のとき `null.total_count` にならず `undefined` を返す
+- `??`（Nullish Coalescing）— 左側が `null` / `undefined` なら右側（`'-'`）を使う
+
+APIが返るまで `stats` は `null` なので、データがない間は `-` と表示する。
+
+**成長率のプラス符号（478行目）**
+
+```typescript
+stats.growth_rate >= 0 ? `+${stats.growth_rate}` : `${stats.growth_rate}`
+```
+
+JavaScriptは正の数に `+` を自動でつけないため、`+5` と表示したいとき明示的に文字列として組み立てる必要がある。
+
+---
+
+### App（メイン）— 513〜543行目の詳細
+
+**`handleAuthSuccess`（513〜516行目）**
+
+```typescript
+const handleAuthSuccess = (newAuth: AuthState) => {
+  setAuth(newAuth)
+  setScreen('upload')
+}
+```
+
+ログイン・登録成功時に `AuthScreen` から呼ばれる。`auth` はほぼ全画面で使う情報なので最上位の `App` が持つ。子コンポーネントが直接 `setAuth` を呼べないため「成功したら呼んでね」と関数を props で渡す設計。
+
+**`handleLogout`（518〜525行目）**
+
+```typescript
+const handleLogout = () => {
+  fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' })
+    .finally(() => {
+      setAuth(null)
+      setAnalysisResult(null)
+      setScreen('login')
+    })
+}
+```
+
+`.then()` も `.catch()` も書かず `.finally()` だけ使っている。APIが成功しても失敗しても「stateをリセットしてログイン画面に戻す」動作は変わらないため。`setAnalysisResult(null)` もリセットするのは次に別ユーザーでログインしたとき前のユーザーの結果が残らないようにするため。
+
+**`handleResult`（527〜530行目）**
+
+```typescript
+const handleResult = (result: AnalysisResult) => {
+  setAnalysisResult(result)
+  setScreen('result')
+}
+```
+
+`UploadScreen` から分析結果を受け取って `App` のstateに保存し、結果画面に切り替える。`analysisResult` を `App` が持つことで `DashboardScreen` にも `latestResult` として渡せる。
+
+**変数名のスコープと適切な長さ（リーダブルコード）**
+
+引数 `result` はこの2行の中だけで使われる狭いスコープ。型ヒント `AnalysisResult` もすぐ隣にあるため `result` で十分明確。一方 `App` のstate `analysisResult` は複数画面に渡す広いスコープなので長くて具体的な名前が必要。スコープが小さいほど短い名前でよい、というリーダブルコードの考え方。（`r` のような1文字は「略称」でも不十分で改善が必要）
+
+**`isAuthScreen`（532行目）**
+
+```typescript
+const isAuthScreen = screen === 'login' || screen === 'register'
+```
+
+同じ条件を2か所で使うため変数にして名前をつける。「今ログイン・登録画面にいるか」という意図が読んで分かる。リーダブルコードの考え方。
+
+**ロゴのクリック制御（537〜542行目）**
+
+```typescript
+onClick={() => auth && setScreen('upload')}
+style={{ cursor: auth ? 'pointer' : 'default' }}
+```
+
+ログイン済みのときだけクリックでアップロード画面へ移動。`cursor` を切り替えて「クリックできる・できない」の見た目の手がかりをユーザーに与えるUXの工夫。
+
+**`minHeight: '100vh'`**
+
+`vh` は「ビューポートの高さの1%」という単位。`100vh` で画面の高さ全体を埋める。
+
+**`justifyContent: 'space-between'`**
+
+Flexboxの設定。子要素を左右の端に振り分ける。左にロゴ、右にナビを配置するために使っている。

@@ -185,3 +185,7 @@ vocal-analyzer/
 - `backend/audio/techniques.py`: `detect_vibrato` の返り値に `gratuitous_count` フィールドを追加
   - 間奏など旋律のない区間（ピッチ変化がほぼゼロの無声区間）で発生したビブラートをカウントするフィールド
   - 歌唱中のビブラートはアレンジとして加点。旋律のない区間でのビブラートのみ減点対象とする設計方針をTODOコメントに明記
+
+### 2026-05-08 コードレビュー修正
+- `frontend/src/App.tsx`: `handleResult` の引数 `r` → `result` に変更
+  - リーダブルコードの観点から、何を表しているか明確な名前に統一（`backend/api/analysis.py` の `r` → `record` と同じ方針）
