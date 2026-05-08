@@ -126,6 +126,7 @@ crepeを `--no-deps` でインストールしてhmmlearnのpybind11競合を回�
 ### 技術的負債・将来対応
 
 - **python-jose → PyJWT への切り替え**: `python-jose` にCVEが報告済み。コードレビュー完了後に `PyJWT` へ切り替える
+- **本番環境の接続情報管理**: `.env.example` の `DATABASE_URL` / `REDIS_URL` は開発用のデフォルト値がそのまま書かれている。本番デプロイ時には環境変数またはAWS Secrets Managerなどのシークレット管理ツールで注入すること（`POSTGRES_PASSWORD` のハードコードも同様）
 - **PC版UI実装**: 現状はスマートフォン向けレイアウト。PC向けレスポンシブ対応またはPC専用レイアウトを追加する
 - **複数ファイル一括アップロード・日付指定機能**: 複数の音声ファイルを一度に投下する機能、および録音日時を手動で指定して登録する機能
 
@@ -136,7 +137,9 @@ crepeを `--no-deps` でインストールしてhmmlearnのpybind11競合を回�
 ```
 vocal-analyzer/
 ├── docker-compose.yml
-├── nginx/default.conf
+├── .env.example                         # 環境変数のテンプレート（実際の値は .env に書く）
+├── .gitignore
+├── nginx/default.conf                   # nginxリバースプロキシ設定
 ├── backend/
 │   ├── main.py                      # FastAPIアプリ本体
 │   ├── database.py                  # SQLAlchemy接続・get_db()
@@ -189,3 +192,16 @@ vocal-analyzer/
 ### 2026-05-08 コードレビュー修正
 - `frontend/src/App.tsx`: `handleResult` の引数 `r` → `result` に変更
   - リーダブルコードの観点から、何を表しているか明確な名前に統一（`backend/api/analysis.py` の `r` → `record` と同じ方針）
+
+### 2026-05-09 コードレビュー修正
+- `frontend/index.html`: `<title>frontend</title>` → `<title>Vocal Analyzer</title>` に変更
+  - Viteの初期値のままだったため、プロジェクト名に合わせた
+- `frontend/README.md`: 削除
+  - `npm create vite` 時に自動生成されたViteデフォルトのREADMEで、プロジェクト固有の内容がなかったため
+
+### 2026-05-09 コードレビュー方針追記・バグ修正
+- `SPEC.md` / `CLAUDE.md`: 本番環境の接続情報管理に関する注記を追加
+  - `.env.example` の `DATABASE_URL` / `REDIS_URL` は開発用デフォルト値がそのまま記載されているため、本番デプロイ時には環境変数またはシークレット管理ツールで注入すること
+  - `docker-compose.yml` の `POSTGRES_PASSWORD` ハードコードも同様に本番では別途管理が必要な旨を明記
+- `README.md`: セットアップのURLを修正
+  - `http://localhost:8000` → `http://localhost:8080`（docker-compose.ymlのポートマッピングが `8080:8000` のため）

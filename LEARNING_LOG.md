@@ -1716,3 +1716,335 @@ style={{ cursor: auth ? 'pointer' : 'default' }}
 **`justifyContent: 'space-between'`**
 
 Flexboxの設定。子要素を左右の端に振り分ける。左にロゴ、右にナビを配置するために使っている。
+
+## フロントエンド設定ファイル群
+
+**`frontend/Dockerfile`**
+
+```dockerfile
+FROM node:20-slim
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+```
+
+- `COPY package*.json` → `RUN npm install` → `COPY . .` の順番が重要。先にpackage.jsonだけコピーして `npm install` することで、ソースコードを変えてもnode_modulesのキャッシュが効く。全ファイルコピー後に `npm install` するとソース変更のたびに再インストールしてしまう
+- `--host 0.0.0.0` — Viteのデフォルトはlocalhostのみ待ち受けるため、コンテナ外（ホストやnginx）からアクセスできない。0.0.0.0で全インターフェースから受け付けるように指定
+
+**`frontend/src/main.tsx`**
+
+フロントエンドのエントリーポイント。`index.html` の `<div id="root">` を取得してReactアプリを描画する。
+
+- `!`（非nullアサーション） — `getElementById` はnullを返す可能性があるが、`index.html` に必ず `id="root"` があるため null にならないと断言するTypeScriptの記法
+- `<StrictMode>` — 開発環境でReactの警告を強化するモード。本番ビルドでは自動的に無効になる
+
+**`frontend/index.html`**
+
+ViteがブラウザにHTMLを返すときのテンプレート。`<div id="root">` がReactの描画先。`<title>frontend</title>` はViteの初期値のままだったため `<title>Vocal Analyzer</title>` に修正済み。
+
+**`frontend/package.json`**
+
+- `dev` — Viteの開発サーバーを起動。`docker compose up` で動くのはこれ
+- `build` — TypeScriptの型チェック（`tsc -b`）のあとViteでバンドルして `dist/` を生成
+- `lint` — ESLintでコードをチェック
+- `preview` — `build` で生成した `dist/` をローカルでプレビュー
+
+**ESLintとは**
+
+JavaScriptおよびTypeScriptのコードを静的に解析して「バグになりやすい書き方」や「ルール違反」を検出するツール。実行前にコードの問題を指摘してくれる。`useEffect` の依存配列漏れや未使用変数などを警告する。
+
+**`dist/` とは**
+
+`npm run build` を実行したときにViteがTypeScriptとReactをブラウザが直接読めるJavaScriptに変換して出力するフォルダ。本番デプロイ時はこの中身をサーバーに置く。ソースコードから毎回生成できるため `.gitignore` で除外されている。
+
+**`frontend/vite.config.ts`**
+
+Viteの設定ファイル。`@vitejs/plugin-react` を有効化することでJSX変換やホットリロードが動く。現在は最小限の設定。
+
+**`frontend/tsconfig.json` / `tsconfig.app.json` / `tsconfig.node.json`**
+
+TypeScriptの設定が3ファイルに分かれている。
+
+- `tsconfig.json` — ルート設定。他2つを参照するだけ
+- `tsconfig.app.json` — Reactアプリ用の設定。`"strict": true` / `"noUnusedLocals": true` / `"noUnusedParameters": true` で厳しめの型チェック
+- `tsconfig.node.json` — vite.config.tsのみを対象にしたNode.js環境用の設定
+
+**`frontend/eslint.config.js`**
+
+TypeScript + React向けのESLint設定。`react-hooks` プラグインで `useEffect` の依存配列漏れなどを検出する。`dist/` フォルダは除外済み。
+
+**`frontend/App.css` / `index.css`**
+
+Viteが自動生成したデフォルトのスタイル。`App.tsx` はインラインスタイルで書かれているためほぼ使われていない。将来CSS設計を整理するときに削除または置き換えが必要。
+
+**`frontend/.gitignore`**
+
+Viteが自動生成したフロントエンド用 `.gitignore`。`node_modules/` / `dist/` / ログファイル / エディタ設定などを除外。ルートの `.gitignore` と二重になっている部分もあるが、フロントエンドディレクトリ単体でも独立して使えるようにするための設計。
+
+**`frontend/README.md`**
+
+`npm create vite` 時に自動生成されたViteデフォルトのREADME。プロジェクト固有の内容がなかったため削除済み。
+
+## バックエンド Alembic 関連ファイル
+
+**`backend/api/__init__.py` / `backend/audio/__init__.py`**
+
+コメントのみの1行ファイル。Pythonではディレクトリをパッケージとして認識させるために `__init__.py` が必要。中身は空でも成立する。これがあることで `from backend.api.auth import router` のようなインポートが機能する。
+
+**`backend/alembic/script.py.mako`**
+
+Alembicが `alembic revision --autogenerate` を実行するときに新しいマイグレーションファイルを自動生成するテンプレートファイル。`${message}` や `${up_revision}` は変数で、Alembicが値を埋め込む。自分で編集するものではない。
+
+**`backend/alembic/versions/62b066d20808_create_initial_tables.py` — 初回マイグレーション**
+
+- `down_revision: None` — 前のマイグレーションがない（最初のマイグレーション）という意味
+- `upgrade()` で `users` / `analysis_results` テーブルを作成
+- `downgrade()` で元に戻す（テーブル削除）
+- `op.create_index(op.f('ix_users_email'), ...)` — メールアドレスに一意インデックスを作成。ログイン時の高速検索のため
+
+**`backend/alembic/versions/a1b2c3d4e5f6_add_hashed_password_to_users.py` — 2回目マイグレーション**
+
+- `down_revision: '62b066d20808'` — 初回マイグレーションのIDが入っている。これで「初回の後に適用する」という順序が定義される。Alembicはこのチェーンをたどって順番に実行する
+- `upgrade()` で `users` テーブルに `hashed_password` カラムを追加
+- `nullable=False` なのに `server_default=''` — 既存の行があるときに `NOT NULL` カラムを追加するための対応。既存行には空文字が自動で入る。SPEC.mdの「デフォルト'' → 将来的に要見直し」の理由がこれ
+
+## `SPEC.md` — 開発者視点の設計書
+
+README.mdが「外から見た説明書」なのに対して、SPEC.mdは「開発者視点の設計書・意思決定の記録」。「なぜこう設計したか」の理由が書かれている。
+
+**プロダクトの目的 / 開発の背景**
+
+既存カラオケ採点システムの問題点（Anti-Patterns）が具体的に書かれている。
+
+- ハードウェア依存 — マイク感度でスコアが変わる
+- 棒読みの過大評価 — 機械的に安定しているだけで高得点になる
+- 回数主義 — しゃくりを何回使ったかだけで評価している
+
+これらを解決するために作っているという背景。「なんとなく作る」ではなく具体的な課題意識から始まっていることが読み取れる。
+
+**コア評価ロジックの設計方針**
+
+- A. スコアマトリクス — 合計点1つではなく「基本忠実度・表現の不自然さ・音楽的ダイナミクス」の3軸で評価する設計。棒読み検出は「ピッチ分散が極端に小さい かつ 技法数がゼロ → 減点」というロジック
+- B. 技法密度分析 — 「何回使ったか」ではなく「フレーズの中で適切な密度で使えているか」で評価する方針
+- C. テキストフィードバック — まずルールベース（テンプレート文章）で実装し、将来LLMに差し替えられる設計にする。コストと安定性を両立する判断
+
+**既知の問題・技術的負債**
+
+| 問題 | 重大度 |
+|---|---|
+| `GET /analysis/{id}` に認証チェックがない | 🔴 高（Phase 6前に修正予定） |
+| タイミング攻撃によるユーザー列挙の可能性 | 🟠 中 |
+| ロックアウトのRedis操作が非atomic | 🟠 中 |
+| `python-jose` にCVEが報告済み | 🟠 中 |
+
+**AI活用の方針**
+
+Claude Codeをどう使うかの原則がまとめてある。「自信満々な回答ほど疑う」「一度に大きな作業をさせない」「最終判断は常に自分がする」など、AIと協力するときの心構えが書かれている。
+
+## `README.md` — プロジェクトの顔
+
+GitHubでリポジトリを開いたときに最初に表示されるファイル。「このプロジェクトは何か・どう使うか」を初めて見た人に伝える役割。CLAUDE.mdが「Claudeへの指示書」なのに対して、README.mdは「人間への説明書」。
+
+**各セクションの役割**
+
+- `実装済みの機能 / 開発予定の機能` — 今できることと将来できることを分けて記載。スクリーンショットもあり、コードを読まなくても何のアプリか伝わる
+- `技術スタック` — 使用技術の一覧。採用理由まで書く必要はなく「何を使っているか」でよい
+- `セットアップ` — `git clone` から `docker compose up` まで3ステップ。前提条件はDockerのインストールのみ
+- `APIエンドポイント` — フロントエンド開発者や外部から使う人向けの参照用ドキュメント
+- `セキュリティとプライバシー` — 音声データを保存しないことやJWTの扱いなど、ユーザーにとって重要なプライバシー方針
+- `開発ロードマップ` — Phase 1〜9の進捗一覧
+
+**バグ修正**
+
+セットアップのURLが誤っていた。`docker-compose.yml` のポートマッピングは `"8080:8000"`（ホスト側8080番）なのに `http://localhost:8000` と書かれていた。`http://localhost:8080` に修正済み。
+
+## `CLAUDE.md` — Claude Code専用の引き継ぎドキュメント
+
+会話を新しく始めるたびにClaudeはコードの記憶をリセットするが、CLAUDE.mdはプロジェクトルートに置くことでClaudeが毎回自動で読み込むファイル。「このプロジェクトはこういうものです、こう動いてください」という指示書の役割を果たす。
+
+**各セクションの役割**
+
+- `## Claude Codeへの指示` — Claudeの振る舞いに関するルール。「推測と確実な情報を区別する」「存在しないAPIを使わない」など。これがあることで会話が変わるたびに同じお願いを繰り返さなくて済む
+- `## 技術スタック` / `## ポート構成` — 前提知識の共有。Claudeがコードを読むときの文脈になる
+- `## 完了済みフェーズ` — どこまで実装が終わっているかの地図。的外れな提案を防ぐ
+- `## 現在の状態` — ブランチ名・最終確認日など今この瞬間のスナップショット。作業のたびに更新が必要
+- `## 決定済みの仕様・注意事項` — コードを読んだだけでは分からない「なぜこうなっているか」の理由。たとえば「Crepe採用: 精度重視のためlibrosa.pyinへの変更はしない」はコードを見ても理由がわからないため、ここに書くことで誤った変更提案を防ぐ
+- `## 次にやるべきこと` — 次のフェーズの計画と技術的負債の一覧
+- `## ファイル構成` — 重要ファイルの一覧と役割。Claudeがファイルを探すときの道しるべ
+- `## ログ` — 日付付きの変更履歴。「なぜこの変更をしたか」の理由ベースの記録
+
+## `.env.example` — 環境変数のテンプレート
+
+`.env` は秘密情報を書くファイルで `.gitignore` で除外されているため、リポジトリをクローンした人の手元には存在しない。`.env.example` は「こういう変数が必要ですよ」というテンプレートとしてGitに入れておくファイル。実際の値（本物の秘密キーなど）は書かず、ダミー値や説明を書いておく。
+
+**各変数の意味**
+
+- `DATABASE_URL` — PostgreSQLへの接続文字列。形式は `postgresql://ユーザー名:パスワード@ホスト名:ポート/DB名`。`@db` の `db` はDockerの内部ネットワーク上のホスト名
+- `REDIS_URL` — Redisへの接続文字列。`redis` はDockerの内部ネットワーク上のホスト名
+- `SECRET_KEY=your-secret-key-here` — JWTの署名に使う秘密キー。`your-secret-key-here` はダミー値で実際に使う際は強力なランダム文字列に差し替える
+- `ALGORITHM=HS256` — JWTの署名アルゴリズム。`auth_utils.py` で `os.environ.get("ALGORITHM", "HS256")` と読んでいる
+- `ACCESS_TOKEN_EXPIRE_MINUTES=30` — JWTの有効期限（分）。`auth_utils.py` で `os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", 30)` と読んでいる
+- `DEBUG=true` — デバッグモードのフラグ。現在の `main.py` では読み込まれておらず、将来用に書いてある変数
+
+**本番環境での注意**
+
+`DATABASE_URL` と `REDIS_URL` には開発用のデフォルト値がそのまま書かれている。`.env.example` はGitに入るファイルなので本来はダミー値にすべき。本番デプロイ時には環境変数またはAWS Secrets Managerなどのシークレット管理ツールで実際の接続情報を注入すること。SPEC.mdのセキュリティセクションとCLAUDE.mdの技術的負債セクションに方針を記載済み。
+
+## `.gitignore` — Gitの除外設定
+
+書いたパターンに一致するファイル・ディレクトリは `git add` しても無視され、リポジトリに含まれない。
+
+**環境変数**
+
+`.env` — `SECRET_KEY` などの秘密情報を書くファイル。Gitに入れるとGitHubに公開されて秘密情報が漏れるため必ず除外する。
+
+**Python**
+
+- `__pycache__/` / `*.pyc` / `*.pyo` — Pythonが実行時に自動生成するキャッシュファイル。ソースコードから毎回生成されるので管理不要
+- `.venv/` / `venv/` — 仮想環境ディレクトリ。`requirements.txt` があれば再現できるので管理不要
+
+補足: Python3では `.pyc` は `__pycache__/` の中に生成されるため `__pycache__/` だけで十分。両方書いても害はないが冗長。
+
+**Node**
+
+- `node_modules/` — `npm install` でインストールしたパッケージ。`package.json` があれば再現できる。サイズも巨大になるため除外必須
+- `dist/` — `npm run build` でViteが生成するビルド成果物。ソースから毎回生成できるので管理不要
+
+**Docker**
+
+`postgres_data/` — プロジェクトルートにDBデータディレクトリが万が一できてしまったときのための除外指定。DBデータをGitに入れると容量が巨大になり機密データが漏れるリスクがある。
+
+**OS**
+
+- `.DS_Store` — macOSがフォルダを開いたときに自動生成するメタデータファイル
+- `Thumbs.db` — Windowsがサムネイル情報を保存するファイル
+
+チームメンバーのOSが違っても余計なファイルがGitに入らないようにするための除外指定。
+
+**一時ファイル（音声）**
+
+`*.wav` / `*.mp3` / `*.m4a` / `tmp/` — 著作権保護の設計方針（録音音声ファイルは保存しない）に基づき、開発中のテスト用音声ファイルが誤ってGitに入らないようにするための除外指定。
+
+## `nginx/default.conf` — リバースプロキシの設定
+
+`server { }` が1つのサーバー定義で、その中に `location { }` が2つある。
+
+**`listen 80;`**
+
+nginxが80番ポートで接続を待ち受ける。`docker-compose.yml` の `ports: "80:80"` に対応。
+
+**`location / { }` — フロントエンドへの転送**
+
+`/` はすべてのURLにマッチする（最も広い条件）。`/api` にマッチしなかったリクエストがここに来る。
+
+- `proxy_pass http://frontend:5173` — frontendサービスのVite開発サーバーに転送
+- `proxy_http_version 1.1` / `Upgrade` / `Connection 'upgrade'` — ViteのホットリロードはWebSocketを使っているため必要。これがないとファイル変更時にブラウザが自動更新されない
+- `proxy_set_header Host $host` — 元のリクエストのホスト名を転送先にそのまま渡す
+
+**`location /api { }` — バックエンドへの転送**
+
+URLが `/api` で始まるリクエストをbackendサービスのポート8000（FastAPI）に転送する。URLパスはそのまま引き継がれるため `/api/v1/analysis/upload` は `http://backend:8000/api/v1/analysis/upload` に転送される。
+
+- `proxy_set_header X-Real-IP $remote_addr` — クライアントの本来のIPアドレスをバックエンドに伝える。nginxが中継役なので何もしないとバックエンドには「nginxのIPからリクエストが来た」と見えてしまう。nginxのIPが使われると全ユーザーが同じIPに見えるため、`auth_utils.py` のロックアウト（5回失敗で15分ブロック）が1人の失敗で全ユーザーをブロックしてしまう
+- `proxy_read_timeout 300` / `proxy_connect_timeout 300` / `proxy_send_timeout 300` — 音声分析は処理に時間がかかるためタイムアウトを300秒（5分）に延ばしている。デフォルトは60秒
+
+**疑問と回答:**
+- Q: `X-Real-IP` がないとなぜよくないの？
+- A: nginxのIPを渡すと全ユーザーが同じIPに見えてしまう。ロックアウット機能が1人の失敗で全ユーザーをブロックする事態になる。中継地点のIPを渡すと他のユーザーにも干渉するため `X-Real-IP` で本物のクライアントIPを渡す必要がある
+
+## `docker-compose.yml` — 複数サービスの起動設定
+
+`docker-compose up` を1回叩くだけで frontend / backend / db / redis / nginx の5サービスが連携して起動する。各サービスの定義を1ファイルにまとめている。
+
+**`build: context:` と `image:` の違い**
+
+| 書き方 | 意味 |
+|---|---|
+| `build: context: ./frontend` | 指定ディレクトリの `Dockerfile` を使って自分でイメージをビルドする |
+| `image: postgres:15` | Docker Hub（公開イメージ置き場）から既製のイメージをダウンロードして使う |
+
+`build: context: ./frontend` と書くと、DockerはそのディレクトリにあるDockerfileを自動的に探して使う。`image:` を使う場合はDockerfileを自分で書く必要はない。
+
+**`ports:` — ポートマッピング**
+
+`"8080:8000"` の左がホスト（自分のPC）、右がコンテナ内部のポート。`http://localhost:8080` でアクセスするとコンテナの8000番に届く。
+
+**`volumes:` — マウント**
+
+コンテナはデフォルトではホスト側のファイルが見えない独立した環境。マウントとはホスト側のディレクトリ/ファイルをコンテナ内の特定パスに「接続」する操作。
+
+```yaml
+- ./frontend:/app
+```
+
+ホスト `./frontend` とコンテナ内 `/app` が同じファイルを指すようになる。ホスト側でファイルを編集すると即コンテナ側にも反映される（ホットリロードが効く理由）。
+
+```yaml
+- /app/node_modules
+```
+
+`node_modules` はコンテナ内のものを使う（ホスト側のもので上書きしない）という指定。
+
+**`environment:` — 環境変数**
+
+コンテナ内の `os.environ` で読める値を設定する。`DATABASE_URL` の `@db:5432` の `db` はDockerの内部ネットワーク上のホスト名（サービス名がそのままホスト名になる）。`SECRET_KEY=${SECRET_KEY}` はホスト側の環境変数を参照する。`.env` ファイルか `export SECRET_KEY=...` で設定しておく必要がある。
+
+**`depends_on:` — 起動順序**
+
+`depends_on: backend` と書くと backend が起動してから frontend を起動する。`db` と `redis` より先に `backend` が起動するとエラーになるため、依存関係を明示する。
+
+**DBの環境変数（初回起動時の自動作成）**
+
+```yaml
+POSTGRES_USER: postgres
+POSTGRES_PASSWORD: postgres
+POSTGRES_DB: vocal_analyzer
+```
+
+PostgreSQL公式イメージはこれらの環境変数を受け取ると、初回起動時に `CREATE USER` と `CREATE DATABASE` を自動実行する。コンテナはゼロから起動するため、DBユーザーとDBを自動で用意する仕組みが必要になる。
+
+**named volume（名前付きボリューム）とは**
+
+マウントには2種類ある：
+
+| | bind mount | named volume |
+|---|---|---|
+| 例 | `./frontend:/app` | `postgres_data:/var/lib/postgresql/data` |
+| 保存場所 | ホスト上の指定パス | Dockerが管理する専用領域 |
+| 用途 | ソースコード共有（開発用） | DBデータの永続化 |
+
+named volumeはDockerが管理する専用領域（WSL2では `/var/lib/docker/volumes/` 以下）に保存される。コンテナを削除してもデータが残り、`docker compose up` で再起動したとき前回のデータが再利用できる。
+
+ファイルの末尾にある：
+
+```yaml
+volumes:
+  postgres_data:
+```
+
+これは「`postgres_data` という名前のボリュームをDockerの管理対象として登録する」という宣言。宣言しておくことで `docker volume ls` で確認でき、`docker compose down` してもデータが消えない。名前付きボリュームは事前宣言が必要なルール。
+
+**named volumeのセキュリティ**
+
+- 他のコンテナやプロセスからは基本的にアクセスできない（そのボリュームをマウントしたコンテナのみ読み書き可能）
+- ホストに侵入されたらデータにアクセスされるリスクはある
+- ボリューム内のファイルは暗号化されていない（平文）
+- 本番環境では暗号化ディスク（AWS EBSなど）を使うのが一般的
+
+**リバースプロキシ（nginx）**
+
+ブラウザとサーバーの間に立って、リクエストを適切なサービスに振り分ける役割。
+
+```
+ブラウザ → nginx（80番）
+                 ├── /api/... → backend（8000番）に転送
+                 └── /        → frontend（5173番）に転送
+```
+
+ユーザーからは `http://localhost` 1つに見えるが、裏ではnginxが仕分けをしている。nginxの設定は `./nginx/default.conf` をコンテナ内のnginxが設定ファイルを読む場所（`/etc/nginx/conf.d/default.conf`）にマウントして反映させる。
+
+**疑問と回答:**
+- Q: DBパスワードがハードコードされているのは問題ないの？
+- A: ローカル開発専用の構成としてはよくある書き方。ただし本番環境では `POSTGRES_PASSWORD` をAWS Secrets Managerなどのシークレット管理ツールまたは環境変数で注入する必要がある。`SECRET_KEY` が `${SECRET_KEY}` で外部注入されているのに対して `POSTGRES_PASSWORD` がハードコードされている点は一貫性がないため、SPEC.mdのセキュリティセクションに本番対応の注記を追記した。

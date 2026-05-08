@@ -67,8 +67,8 @@ docker compose up --build
 | サービス | URL |
 |---|---|
 | フロントエンド | http://localhost:5173 |
-| バックエンドAPI | http://localhost:8000 |
-| APIドキュメント | http://localhost:8000/docs |
+| バックエンドAPI | http://localhost:8080 |
+| APIドキュメント | http://localhost:8080/docs |
 
 ---
 
