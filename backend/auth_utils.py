@@ -6,9 +6,9 @@ JWT生成・検証、パスワードハッシュ化を担当する
 import os
 from datetime import datetime, timedelta, timezone
 
+import jwt
 import redis
 from fastapi import Cookie, Depends, HTTPException, status
-from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
@@ -82,7 +82,7 @@ def _decode_token(token: str) -> int:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = int(payload["sub"])
         return user_id
-    except (JWTError, KeyError, ValueError):
+    except (jwt.InvalidTokenError, KeyError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="認証情報が無効です。再ログインしてください。",

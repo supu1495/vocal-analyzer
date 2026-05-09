@@ -2048,3 +2048,61 @@ volumes:
 **疑問と回答:**
 - Q: DBパスワードがハードコードされているのは問題ないの？
 - A: ローカル開発専用の構成としてはよくある書き方。ただし本番環境では `POSTGRES_PASSWORD` をAWS Secrets Managerなどのシークレット管理ツールまたは環境変数で注入する必要がある。`SECRET_KEY` が `${SECRET_KEY}` で外部注入されているのに対して `POSTGRES_PASSWORD` がハードコードされている点は一貫性がないため、SPEC.mdのセキュリティセクションに本番対応の注記を追記した。
+
+## `python-jose` → `PyJWT` への移行（Phase 5.5→6 の準備）
+
+`python-jose` にCVE-2024-33663（ECDSA署名検証の脆弱性）が報告されており、`PyJWT` へ切り替えた。
+
+### CVEとは
+
+CVE（Common Vulnerabilities and Exposures）はセキュリティ上の脆弱性に振られる識別番号。番号を検索するとどんな脆弱性かを調べられる。
+
+### PyJWT が推奨される理由
+
+| | python-jose | PyJWT |
+|---|---|---|
+| メンテナンス | 停滞気味 | 活発 |
+| 信頼性 | CVE報告あり | Django・Flask公式でも採用 |
+| API互換性 | — | ほぼ同じ書き方で移行可能 |
+
+### 変更内容
+
+**`requirements.txt`**
+```
+# Before
+python-jose[cryptography]==3.3.0
+
+# After
+PyJWT==2.12.1
+```
+
+**`auth_utils.py`**
+```python
+# Before
+from jose import JWTError, jwt
+except (JWTError, KeyError, ValueError):
+
+# After
+import jwt
+except (jwt.InvalidTokenError, KeyError, ValueError):
+```
+
+`jwt.encode()` / `jwt.decode()` の書き方はどちらも同じで変更不要。
+
+### バージョン選定の考え方
+
+- セキュリティ問題が起点の移行なので、最新安定版（2.12.1）を選ぶ
+- 古いバージョンを固定すると、そのバージョン自体に別の脆弱性があった場合に意味がなくなる
+- プロジェクト全体が `==` で固定する方針なので `==` で合わせる
+
+### PyPI名とimport名の違い
+
+Pythonでは `pip install` するときの名前（PyPI名）と `import` するときの名前が異なるケースがある：
+
+| pip install | import |
+|---|---|
+| `PyJWT` | `import jwt` |
+| `Pillow` | `import PIL` |
+| `scikit-learn` | `import sklearn` |
+
+`PyJWT` をインストールしても `import PyJWT` ではなく `import jwt` と書く。

@@ -205,3 +205,10 @@ vocal-analyzer/
   - `docker-compose.yml` の `POSTGRES_PASSWORD` ハードコードも同様に本番では別途管理が必要な旨を明記
 - `README.md`: セットアップのURLを修正
   - `http://localhost:8000` → `http://localhost:8080`（docker-compose.ymlのポートマッピングが `8080:8000` のため）
+
+### 2026-05-09 python-jose → PyJWT 移行（CVE-2024-33663対応）
+- `backend/requirements.txt`: `python-jose[cryptography]==3.3.0` → `PyJWT==2.12.1`
+  - CVE-2024-33663（ECDSA署名検証の脆弱性）が報告されており、メンテナンスが活発なPyJWTへ切り替え
+- `backend/auth_utils.py`: `from jose import JWTError, jwt` → `import jwt` / `JWTError` → `jwt.InvalidTokenError`
+- `SPEC.md`: 既知の問題リストを更新（Phase 5.5で解決済みの3項目を解決済みセクションへ移動）
+- `SPEC.md`: Phase 6 テスト計画を詳細化（認証・認可・入力バリデーション・正常系の主要フローを網羅）
