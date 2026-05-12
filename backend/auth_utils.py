@@ -6,10 +6,10 @@ JWT生成・検証、パスワードハッシュ化を担当する
 import os
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 import jwt
 import redis
 from fastapi import Cookie, Depends, HTTPException, status
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -23,12 +23,11 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24時間
 _MAX_FAILURES = 5         # この回数失敗するとロック
 _LOCKOUT_SECONDS = 60 * 15  # ロック持続時間: 15分
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 _redis = redis.from_url(os.environ.get("REDIS_URL", "redis://redis:6379"))
 
 # タイミング攻撃対策: ユーザーが存在しない場合でも verify_password を実行するためのダミーハッシュ
 # モジュールロード時に1回だけ生成する
-DUMMY_HASH = pwd_context.hash("dummy")
+DUMMY_HASH = bcrypt.hashpw(b"dummy", bcrypt.gensalt()).decode()
 
 # INCR と EXPIRE を atomic に実行する Lua スクリプト
 # INCR と EXPIRE の間にクラッシュが発生しても TTL が失われない
@@ -63,11 +62,11 @@ def clear_lockout(email: str) -> None:
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    return bcrypt.checkpw(plain_password.encode(), hashed_password.encode())
 
 
 def create_access_token(user_id: int) -> str:
