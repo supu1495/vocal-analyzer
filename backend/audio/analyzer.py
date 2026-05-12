@@ -3,6 +3,10 @@
 separator・pitch・techniquesを組み合わせて分析結果を生成する
 """
 
+import numpy as np  # 周波数配列のフィルタリングと最小・最大値計算に使用
+import librosa  # hz_to_midi・midi_to_note による周波数→ノート名変換に使用
+from librosa.onset import onset_detect  # 発声タイミング検出（librosa.onset.onset_detectの重複を避けるため個別import）
+
 from audio.separator import VocalSeparator
 from audio.pitch import PitchDetector
 from audio.techniques import TechniqueDetector
@@ -49,7 +53,9 @@ class AudioAnalyzer:
 
         # ピッチ正確性とリズム感のスコアを計算
         pitch_accuracy = self.pitch_detector.calculate_accuracy(pitch_data, {})
-        rhythm_score = self._calculate_rhythm_score(pitch_data)
+        rhythm_score = self._calculate_rhythm_score(
+            separated_tracks["vocals"], separated_tracks["sample_rate"]
+        )
 
         # 分析結果をもとに改善アドバイスを生成
         feedback = self._generate_feedback(pitch_accuracy, detected_techniques)
@@ -64,13 +70,52 @@ class AudioAnalyzer:
 
     def _calculate_vocal_range(self, pitch_data: dict) -> dict:
         """声域（最低音〜最高音）を計算する"""
-        # TODO: ピッチデータから最低音・最高音を抽出する
-        return {"lowest": None, "highest": None, "range_semitones": 0}
+        frequencies = np.array(pitch_data["frequencies"])
+        confidence = np.array(pitch_data["confidence"])
 
-    def _calculate_rhythm_score(self, pitch_data: dict) -> float:
-        """リズム感・グルーブ感のスコアを計算する"""
-        # TODO: BPMに対するタイミングのズレを分析する
-        return 0.0
+        confident_frequencies = frequencies[confidence > 0.5]
+        if len(confident_frequencies) == 0:
+            return {"lowest": None, "highest": None, "range_semitones": 0}
+
+        lowest_midi = int(round(librosa.hz_to_midi(float(confident_frequencies.min()))))
+        highest_midi = int(round(librosa.hz_to_midi(float(confident_frequencies.max()))))
+
+        return {
+            "lowest": librosa.midi_to_note(lowest_midi),
+            "highest": librosa.midi_to_note(highest_midi),
+            "range_semitones": highest_midi - lowest_midi,
+        }
+
+    def _calculate_rhythm_score(self, vocals: np.ndarray, sample_rate: int) -> float:
+        """リズム感・グルーヴ感のスコアを計算する
+
+        発声タイミング（onset）とビートのズレの一貫性を測定する。
+        一貫したズレ（グルーヴ）を高評価し、バラバラなズレを低評価する。
+        """
+        # ステレオの場合はモノラルに変換（beat_track・onset_detectはモノラルのみ対応）
+        mono = vocals.mean(axis=0) if vocals.ndim == 2 else vocals
+
+        # ビート位置を検出してフレーム番号→秒に変換
+        _, beat_frames = librosa.beat.beat_track(y=mono, sr=sample_rate)
+        beat_times = librosa.frames_to_time(beat_frames, sr=sample_rate)
+
+        # 発声タイミング（onset）を検出してフレーム番号→秒に変換
+        onset_frames = onset_detect(y=mono, sr=sample_rate)
+        onset_times = librosa.frames_to_time(onset_frames, sr=sample_rate)
+
+        if len(onset_times) < 2 or len(beat_times) < 2:
+            return 0.0
+
+        # 各onsetから最も近いビートとのズレ（オフセット）を計算
+        offsets = []
+        for onset in onset_times:
+            nearest_beat = beat_times[np.argmin(np.abs(beat_times - onset))]
+            offsets.append(onset - nearest_beat)
+
+        # オフセットの標準偏差が小さい = 一貫したズレ = グルーヴがある = 高スコア
+        # 標準偏差 0ms → 100点、100ms以上 → 0点
+        offset_std = np.std(offsets)
+        return float(max(0.0, 100.0 - offset_std * 1000.0))
 
     def _generate_feedback(self, pitch_accuracy: float, detected_techniques: dict) -> str:
         """分析結果をもとに改善アドバイスを生成する"""

@@ -3,6 +3,13 @@
 ピッチデータから各種歌唱技法を検出・評価する
 """
 
+import numpy as np  # フレームの配列処理・標準偏差計算に使用
+import librosa  # hz_to_midi による周波数→半音変換に使用
+
+
+_LONG_TONE_MIN_SECONDS = 1.0      # ロングトーン判定の最短持続時間（秒）。DAM・ジョイサウンドは0.5秒だが本プロダクトは厳格な判定を採用
+_LONG_TONE_PITCH_THRESHOLD = 0.5  # ロングトーン中の最大ピッチ変動（半音単位）
+
 
 class TechniqueDetector:
     """
@@ -91,9 +98,52 @@ class TechniqueDetector:
         Returns:
             {
                 "count": 検出回数,
-                "avg_duration": 平均持続時間（秒）,
+                "avg_tone_seconds": 平均持続時間（秒）,
                 "avg_stability": 平均安定性（0-100）
             }
         """
-        # TODO: 長い音の安定性を評価する
-        return {"count": 0, "avg_duration": 0.0, "avg_stability": 0.0}
+        times = np.array(pitch_data["times"])
+        frequencies = np.array(pitch_data["frequencies"])
+        confidence = np.array(pitch_data["confidence"])
+
+        if len(times) < 2:
+            return {"count": 0, "avg_tone_seconds": 0.0, "avg_stability": 0.0}
+
+        seconds_per_frame = float(times[1] - times[0])
+
+        # 信頼度が高く有声のフレームだけMIDIノート番号に変換し、それ以外はNaNにする
+        reliable = (confidence > 0.5) & (frequencies > 0)
+        midi_notes = np.where(reliable, librosa.hz_to_midi(np.maximum(frequencies, 1e-6)), np.nan)
+
+        long_tones = []
+        i = 0
+        while i < len(midi_notes):
+            if np.isnan(midi_notes[i]):
+                i += 1
+                continue
+
+            # 現在のフレームから音程が安定して続く区間を探す
+            j = i
+            segment = [midi_notes[i]]
+            while j + 1 < len(midi_notes) and not np.isnan(midi_notes[j + 1]):
+                if abs(midi_notes[j + 1] - np.mean(segment)) <= _LONG_TONE_PITCH_THRESHOLD:
+                    j += 1
+                    segment.append(midi_notes[j])
+                else:
+                    break
+
+            segment_seconds = (j - i + 1) * seconds_per_frame
+            if segment_seconds >= _LONG_TONE_MIN_SECONDS:
+                stability = float(max(0.0, 100.0 - np.std(segment) * 200.0))
+                long_tones.append({"seconds": segment_seconds, "stability": stability})
+
+            i = j + 1
+
+        if not long_tones:
+            return {"count": 0, "avg_tone_seconds": 0.0, "avg_stability": 0.0}
+
+        return {
+            "count": len(long_tones),
+            "avg_tone_seconds": float(np.mean([lt["seconds"] for lt in long_tones])),
+            "avg_stability": float(np.mean([lt["stability"] for lt in long_tones])),
+        }

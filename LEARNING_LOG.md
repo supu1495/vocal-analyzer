@@ -2668,4 +2668,218 @@ DUMMY_HASH = bcrypt.hashpw(b"dummy", bcrypt.gensalt()).decode()
 
 `b"dummy"` はバイトリテラル（バイト列の文字列リテラル）。`"dummy".encode()` と同じ意味。
 
+---
+
+## Phase 7: 音声分析エンジン本実装
+
+### Phase 7 の実装順序の決定
+
+CLAUDE.md と SPEC.md でフェーズの順序が食い違っていた。
+
+| ドキュメント | Phase 7 | Phase 8 |
+|---|---|---|
+| CLAUDE.md（旧） | 非同期処理（Celery） | — |
+| SPEC.md | 歌唱技法検出・リズム評価など | 非同期処理（Celery） |
+
+**SPEC.md の順序（分析機能先・Celery後）を採用した理由：**
+- Demucs がスタブのまま動いているため、Celery が必要な状況になっていない
+- 同期的に動く分析機能を先に完成させた方が、後から Celery を乗せやすい
+- Celery を先に入れると「中身のない箱に複雑なインフラだけが立つ」状態になる
+
+CLAUDE.md の Phase 7 記述を SPEC.md に合わせて修正した。
+
+---
+
+### `_calculate_vocal_range` — 声域計算
+
+#### 使用する import
+
+```python
+import numpy as np  # 周波数配列のフィルタリングと最小・最大値計算
+import librosa      # hz_to_midi・midi_to_note による周波数→ノート名変換
+```
+
+#### 実装の流れ
+
+1. `confidence > 0.5` のフレームだけ抽出
+2. その中の最小・最大周波数を取得
+3. `librosa.hz_to_midi()` で Hz → MIDI ノート番号（整数）に変換
+4. `librosa.midi_to_note()` で MIDI 番号 → ノート名（例: "C3"）に変換
+
+#### `round()` が必要な理由
+
+`librosa.hz_to_midi(440.0)` は `69.000003` のように微妙なズレを含む小数で返る。`int()` だけだと切り捨てになるため `int(round(...))` で四捨五入してから整数化する。
+
+```python
+int(round(68.9))  # → 69（四捨五入）
+int(68.9)         # → 68（切り捨て）← 音程がズレる
+```
+
+#### `range_semitones` について
+
+```python
+"range_semitones": highest_midi - lowest_midi
+```
+
+MIDI ノート番号の差がそのまま「半音いくつ分の声域か」になる。
+
+---
+
+### `_calculate_rhythm_score` — リズム・グルーヴ評価
+
+#### なぜ `pitch_data` だけでは計算できないか
+
+`pitch_data` には「時刻と周波数」しかない。librosa のビート検出・onset 検出は**波形データ（音のエネルギー変化）**を直接必要とするため、`separated_tracks["vocals"]`（波形）と `separated_tracks["sample_rate"]`（サンプリングレート）を別途渡す必要がある。
+
+#### グルーヴとは何か
+
+**グルーヴ** = ビートに対して**意図的に一定のズレで歌う**技術。例：藤井風のようなアーティストは常に少し拍より遅れて入る（レイドバック）スタイルをとる。
+
+| パターン | 意味 | 評価 |
+|---|---|---|
+| 常に30ms拍より後 | グルーヴ（一貫したズレ） | 高評価すべき |
+| バラバラなズレ | 拍感がない | 低評価が妥当 |
+
+**単純なビート間隔の一貫性で測ると問題がある理由：**
+機械的に正確なタイミングが高評価になり、グルーヴのあるアーティストが低評価になる。これは「既存のカラオケと大差ない」評価になり、本プロダクトの存在意義から逸脱する。
+
+**解決策：** ビートとのズレの一貫性を測る
+- 各発声タイミング（onset）と最も近いビートとのズレ（オフセット）を計算
+- オフセットの**標準偏差が小さい = 一貫したズレ = グルーヴがある = 高スコア**
+
+#### AパートとサビでGrooveが違う問題
+
+音楽的には「Aメロはレイドバック、サビは押し気味」という区間ごとのリズム特性が存在する。ただし区間検出には歌詞や参照データが必要なため現段階では対応不可。グローバルな一貫性スコアとして実装し、将来対応の技術的負債として記録する。
+
+#### サブモジュールと関数の違い
+
+```
+librosa.onset（サブモジュール = 関連する関数の入れ物）
+├── onset_detect()       ← 発声タイミングのフレーム番号を返す
+├── onset_strength()     ← 発声の強さの時系列データを返す
+└── onset_strength_multi()
+```
+
+`from librosa.onset import onset_detect` と書くことで `onset_detect(...)` だけで呼び出せる。`librosa.onset.onset_detect(...)` という名前の重複を避けるための個別 import。
+
+#### `_`（アンダースコア）による戻り値の破棄
+
+```python
+_, beat_frames = librosa.beat.beat_track(y=mono, sr=sample_rate)
+```
+
+`beat_track()` は `(tempo_bpm, beat_frames)` の2つを返す。テンポの数値は使わないため `_`（捨てる変数）に入れる。`_` は「この値は意図的に使わない」という Python の慣例。
+
+#### `len() < 2` の理由
+
+onset が 1 個以下では「ズレのばらつき」が計算できない（1点に対する標準偏差は定義できない）。比較対象が最低 2 回必要。
+
+#### `argmin` と `abs`
+
+```python
+nearest_beat = beat_times[np.argmin(np.abs(beat_times - onset))]
+```
+
+| 部分 | 意味 |
+|---|---|
+| `beat_times - onset` | 各ビート時刻とonsetの差（負になることもある） |
+| `np.abs(...)` | 絶対値（距離として扱うためマイナスをプラスに） |
+| `np.argmin(...)` | 最小値のインデックス（位置番号）を返す |
+| `beat_times[...]` | そのインデックスで最も近いビートの時刻を取り出す |
+
+`nearest_beat` = ニアレストビート（最も近い拍）。
+
+#### スコアの計算式
+
+```python
+offset_std * 1000.0       # 秒 → ミリ秒に変換（0.05秒 → 50ms）
+100.0 - 50                # 100から引いてスコアに変換
+max(0.0, 結果)            # マイナスになった場合は0に丸める
+float(...)                # numpy.float64 → Python標準の float に変換
+```
+
+標準偏差 0ms → 100点、100ms 以上 → 0点。
+
+#### `float()` 変換が必要な理由
+
+`np.std()` の戻り値は `numpy.float64` 型。FastAPI がレスポンスを JSON に変換するとき `numpy.float64` が原因でエラーになることがある。`float()` で Python 標準の `float` に変換することで防ぐ。
+
+---
+
+### `detect_long_tone` — ロングトーン検出
+
+#### ロングトーンの閾値：1秒を採用した理由
+
+DAM・ジョイサウンドは 0.5秒 を採用しているが、本プロダクトでは 1秒 を採用。
+
+| 閾値 | 判定 | 理由 |
+|---|---|---|
+| 0.5秒（既存システム） | 甘い | 4分音符1拍分（120BPM）= 0.5秒なので通常の音符も対象になる |
+| 1秒（本プロダクト） | 厳格 | 「しっかり伸ばせた音だけ」を認める。既存システムとの差別化 |
+
+※ 将来、実際の音声で試して多すぎる場合は調整する可能性あり。定数 `_LONG_TONE_MIN_SECONDS` で管理しているため変更しやすい。
+
+#### Crepe のフレームと時間の関係
+
+Crepe は音声を**一定の間隔**（約 10ms）で分析する。メトロノームが一定のリズムで刻むように、フレームとフレームの間隔は常に同じ。
+
+```
+times = [0.00, 0.01, 0.02, 0.03, ...]  # 10ms 間隔で一定
+```
+
+この一定性のため、最初の 2 点だけ測れば全体の間隔がわかる：
+
+```python
+seconds_per_frame = times[1] - times[0]  # → 0.01秒
+```
+
+「何フレーム続いたか × 1フレームの秒数 = 何秒間続いたか」で持続時間を計算できる。
+
+```
+フレーム数: j - i + 1 = 16フレーム
+持続時間: 16 × 0.01秒 = 0.16秒
+```
+
+#### `np.where()` が両辺を先に計算する問題
+
+```python
+reliable = (confidence > 0.5) & (frequencies > 0)
+midi_notes = np.where(reliable, librosa.hz_to_midi(np.maximum(frequencies, 1e-6)), np.nan)
+```
+
+`reliable` は `frequencies > 0` を条件に含んでいるため、論理的には 0Hz が True になることはない。しかし `np.where(条件, A, B)` は**条件に関係なく A と B 両方を全要素に対して先に計算**してから選択する。そのため `reliable=False` のフレームの `frequencies=0` に対しても `hz_to_midi(0)` が実行され `log(0)` エラーになる。`np.maximum(frequencies, 1e-6)` で 0 を極小値に置き換えることでエラーを防ぐ。
+
+#### `np.isnan()` によるスキップ
+
+信頼できないフレーム（NaN）は音として認識しないためスキップする。
+
+#### `np.mean(segment)` について
+
+`segment` はその時点までに積み上げた MIDI ノート番号のリスト。`np.mean(segment)` でその区間の平均音程を求め、次のフレームが「この平均から 0.5 半音以内か」を比較する。少しずつ音程がずれていく音でも区間を正しく継続・終了できる。
+
+#### 安定性スコアの計算
+
+```python
+stability = float(max(0.0, 100.0 - np.std(segment) * 200.0))
+```
+
+区間内のピッチの標準偏差が小さい = ばらつきが少ない = 安定している。標準偏差 0 → 100点、0.5 半音のばらつきで 0点になるスケール。
+
+#### リスト内包表記による平均計算
+
+```python
+float(np.mean([lt["seconds"] for lt in long_tones]))
+```
+
+`[lt["seconds"] for lt in long_tones]` は「`long_tones` リストの各要素から `"seconds"` だけ取り出したリストを作る」リスト内包表記。例：`[1.5, 2.0, 1.2]` → `np.mean(...)` で平均 `1.57` を計算。
+
+#### 変数・定数の命名決定
+
+| 変更前 | 変更後 | 理由 |
+|---|---|---|
+| `_LONG_TONE_MIN_DURATION` | `_LONG_TONE_MIN_SECONDS` | 単位（秒）を名前に明示する |
+| `frame_duration` | `seconds_per_frame` | 「1フレームあたりの秒数」という意味を明確にする |
+| `duration`（ローカル変数） | `segment_seconds` | 「区間の秒数」という意味を明確にする |
+| `"avg_duration"`（辞書キー） | `"avg_tone_seconds"` | 単位と対象（ロングトーン）を明示する |
+
 `PyJWT` をインストールしても `import PyJWT` ではなく `import jwt` と書く。
