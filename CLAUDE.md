@@ -72,12 +72,19 @@
 - Alembicマイグレーション: `users` テーブルに `hashed_password` カラム追加
 - フロントエンド: ログイン・登録画面追加、全APIに `credentials: 'include'` 付与
 
+### Phase 6: テスト ✅
+- `backend/tests/conftest.py`: SQLiteインメモリDB・fakeredis・TestClient の共通フィクスチャ
+- `backend/tests/test_auth_utils.py`: JWT・パスワード・ロックアウトのユニットテスト
+- `backend/tests/test_api_auth.py`: 認証APIエンドポイントのテスト（register / login / me / logout）
+- `backend/tests/test_api_analysis.py`: 分析APIエンドポイントのテスト（upload / get / statistics）
+- 34テスト全pass確認済み
+
 ---
 
 ## 現在の状態
 
 - **作業ブランチ**: `main`
-- **mainブランチ**: Phase 5まで全てマージ済み
+- **mainブランチ**: Phase 6まで全てマージ済み
 - **ローカル動作確認**: Docker Compose で全5サービス起動確認済み（2026-03-26）
 - **注意**: port 80 はホスト側の Apache が競合する場合あり。その場合は `http://localhost:5173` に直接アクセス
 
@@ -110,13 +117,6 @@ crepeを `--no-deps` でインストールしてhmmlearnのpybind11競合を回�
 
 ## 次にやるべきこと
 
-### Phase 6: テスト
-
-- バックエンドユニットテスト（pytest）
-  - `auth_utils.py` のJWT・パスワード関数
-  - 各APIエンドポイントのAPIテスト
-- フロントエンドテスト（任意）
-
 ### Phase 7以降
 
 | フェーズ | 内容 |
@@ -125,7 +125,6 @@ crepeを `--no-deps` でインストールしてhmmlearnのpybind11競合を回�
 
 ### 技術的負債・将来対応
 
-- **python-jose → PyJWT への切り替え**: `python-jose` にCVEが報告済み。コードレビュー完了後に `PyJWT` へ切り替える
 - **本番環境の接続情報管理**: `.env.example` の `DATABASE_URL` / `REDIS_URL` は開発用のデフォルト値がそのまま書かれている。本番デプロイ時には環境変数またはAWS Secrets Managerなどのシークレット管理ツールで注入すること（`POSTGRES_PASSWORD` のハードコードも同様）
 - **PC版UI実装**: 現状はスマートフォン向けレイアウト。PC向けレスポンシブ対応またはPC専用レイアウトを追加する
 - **複数ファイル一括アップロード・日付指定機能**: 複数の音声ファイルを一度に投下する機能、および録音日時を手動で指定して登録する機能
@@ -153,11 +152,16 @@ vocal-analyzer/
 │   ├── api/
 │   │   ├── auth.py                  # 認証APIエンドポイント
 │   │   └── analysis.py              # 分析APIエンドポイント
-│   └── audio/
-│       ├── analyzer.py              # 分析司令塔
-│       ├── separator.py             # 音源分離（現在スタブ）
-│       ├── pitch.py                 # Crepeピッチ検出
-│       └── techniques.py            # 歌唱技法検出
+│   ├── audio/
+│   │   ├── analyzer.py              # 分析司令塔
+│   │   ├── separator.py             # 音源分離（現在スタブ）
+│   │   ├── pitch.py                 # Crepeピッチ検出
+│   │   └── techniques.py            # 歌唱技法検出
+│   └── tests/
+│       ├── conftest.py              # テスト共通フィクスチャ（SQLite・fakeredis・TestClient）
+│       ├── test_auth_utils.py       # auth_utils.py ユニットテスト
+│       ├── test_api_auth.py         # 認証APIテスト
+│       └── test_api_analysis.py     # 分析APIテスト
 └── frontend/
     └── src/
         └── App.tsx                  # 全画面のReactコンポーネント
@@ -212,3 +216,22 @@ vocal-analyzer/
 - `backend/auth_utils.py`: `from jose import JWTError, jwt` → `import jwt` / `JWTError` → `jwt.InvalidTokenError`
 - `SPEC.md`: 既知の問題リストを更新（Phase 5.5で解決済みの3項目を解決済みセクションへ移動）
 - `SPEC.md`: Phase 6 テスト計画を詳細化（認証・認可・入力バリデーション・正常系の主要フローを網羅）
+
+### 2026-05-12 Phase 6 テスト実装・passlib → bcrypt 移行
+- `backend/tests/`: pytest テスト一式を新規追加（34テスト全pass確認）
+  - `conftest.py`: SQLiteインメモリDB（StaticPool）・fakeredis・TestClient の共通フィクスチャ
+  - `test_auth_utils.py`: JWT・パスワード・ロックアウトのユニットテスト（13テスト）
+  - `test_api_auth.py`: 認証APIテスト・register / login / me / logout（12テスト）
+  - `test_api_analysis.py`: 分析APIテスト・upload / get / statistics（9テスト）
+- `backend/requirements.txt`: テスト用パッケージ追加（`pytest==8.3.5` / `httpx==0.27.0` / `fakeredis==2.26.2`）
+- `backend/tests/conftest.py`: `StaticPool` 追加
+  - SQLiteインメモリDBは接続ごとに別DBが作られるため、`create_all` で作ったテーブルが別接続から見えず "no such table" になる問題を修正
+  - `StaticPool` で全接続が同一SQLite接続を共有するよう変更
+- `backend/requirements.txt`: `passlib[bcrypt]==1.7.4` を削除
+  - Python の標準ライブラリ `crypt` モジュールが Python 3.13 で削除されており、passlib がモジュールロード時にこれをインポートするため将来 ImportError が発生するリスクがある
+  - passlib のメンテナンスが停滞しており自己修正が見込めないため bcrypt を直接使う形に移行
+- `backend/auth_utils.py`: passlib → bcrypt 直接呼び出しに変更
+  - `from passlib.context import CryptContext` / `pwd_context = CryptContext(...)` を削除
+  - `hash_password`: `bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()`
+  - `verify_password`: `bcrypt.checkpw(plain_password.encode(), hashed_password.encode())`
+  - `DUMMY_HASH`: `bcrypt.hashpw(b"dummy", bcrypt.gensalt()).decode()`

@@ -30,7 +30,7 @@ vocal-analyzerの製品要件・設計上の決定事項・将来方針をまと
 
 ## 機能要件
 
-### 実装済み（Phase 1〜5）
+### 実装済み（Phase 1〜6）
 
 | 機能 | 詳細 |
 |---|---|
@@ -40,13 +40,12 @@ vocal-analyzerの製品要件・設計上の決定事項・将来方針をまと
 | ピッチ分析 | Crepeによるフレームごとのピッチ検出・安定性スコア（0〜100） |
 | 分析結果保存 | PostgreSQLに保存。音声ファイルは即時削除 |
 | 統計ダッシュボード | 過去の分析結果の推移グラフ |
+| バックエンドテスト | pytest による認証・認可・分析APIのテスト（34テスト） |
 
 ### 実装予定
 
 | フェーズ | 機能 | 備考 |
 |---|---|---|
-| Phase 5.5 | コードレビュー・学習フェーズ | Phase 6前に実施。ハルシネーション確認・コード理解・動作検証 |
-| Phase 6 | テスト（pytest） | コード理解確認を兼ねる。テスト項目は下記「Phase 6 テスト計画」を参照 |
 | Phase 7 | 歌唱技法検出 | ビブラート・こぶし・フォール・しゃくり・ロングトーン。現在スタブ |
 | Phase 7 | リズム・グルーブ感評価 | BPMに対するタイミングのズレ。現在常に0 |
 | Phase 7 | 声域計算 | 最低音・最高音の検出。現在TODO |
@@ -215,17 +214,18 @@ httpOnly CookieによりXSSでのトークン窃取リスクは軽減済み。
 
 | 問題 | 重大度 | 対応予定 |
 |---|---|---|
-| `python-jose` にCVE-2024-33663が報告済み | 🟠 中 | Phase 6開始前に `PyJWT` へ切り替え |
-| ロギング未実装 | 🟡 低 | Phase 6以降 |
+| ロギング未実装 | 🟡 低 | Phase 7以降 |
 | `docker-compose.yml` に healthcheck 未設定 | 🟡 低 | Phase 8以降 |
 
-### 解決済み（Phase 5.5 コードレビューで対応）
+### 解決済み
 
 | 問題 | 解決内容 |
 |---|---|
-| `GET /analysis/{id}` に認証チェックがない | `Depends(get_current_user)` + `user_id` 所有権チェックを追加 |
-| タイミング攻撃によるユーザー列挙の可能性 | `DUMMY_HASH` をモジュールロード時に生成し、ユーザー不在でも `verify_password` を実行する |
-| ロックアウトのRedis操作が非atomic | `INCR + EXPIRE` をLuaスクリプトでatomicに実行するよう変更 |
+| `GET /analysis/{id}` に認証チェックがない | `Depends(get_current_user)` + `user_id` 所有権チェックを追加（Phase 5.5） |
+| タイミング攻撃によるユーザー列挙の可能性 | `DUMMY_HASH` をモジュールロード時に生成し、ユーザー不在でも `verify_password` を実行する（Phase 5.5） |
+| ロックアウトのRedis操作が非atomic | `INCR + EXPIRE` をLuaスクリプトでatomicに実行するよう変更（Phase 5.5） |
+| `python-jose` にCVE-2024-33663が報告済み | `PyJWT==2.12.1` へ切り替え（Phase 6） |
+| passlib が Python 3.13 の `crypt` モジュール削除に非対応 | passlib を削除し `bcrypt` を直接使用するよう変更（Phase 6） |
 
 ## Phase 6 テスト計画
 

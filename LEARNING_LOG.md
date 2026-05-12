@@ -2572,4 +2572,100 @@ Pythonでは `pip install` するときの名前（PyPI名）と `import` する
 | `Pillow` | `import PIL` |
 | `scikit-learn` | `import sklearn` |
 
+---
+
+## SQLiteインメモリDBとStaticPool
+
+### 問題：`no such table` エラー
+
+`conftest.py` で `Base.metadata.create_all(bind=engine)` を実行してもテスト実行時に `no such table: users` エラーが発生した。
+
+原因は SQLite の `sqlite:///:memory:` の仕様にある。
+
+**SQLiteインメモリDBは接続ごとに別のDBが作られる。**
+
+```
+接続A（create_all）→ テーブル作成された空のDB
+接続B（TestingSessionLocal）→ 別の空のDB（テーブルがない）
+```
+
+`create_all` でテーブルを作っても、`TestingSessionLocal()` が開く接続には別の空のDBが見えるため "no such table" になる。
+
+### 解決：StaticPool
+
+`StaticPool` はエンジン内のすべての接続が**同じ1つのSQLite接続を使いまわす**ようにするオプション。
+
+```python
+from sqlalchemy.pool import StaticPool
+
+engine = create_engine(
+    "sqlite:///:memory:",
+    connect_args={"check_same_thread": False},
+    poolclass=StaticPool,  # 全接続が同一のDB接続を共有する
+)
+```
+
+これにより「インメモリDBが1つ存在し、全員がそれを共有する」状態になる。ディスクには何も書かない。
+
+各テスト後に `Base.metadata.drop_all(bind=engine)` でテーブルを全削除するため、テスト間の独立性は維持される。
+
+### deprecated（非推奨）と removed（削除済み）の違い
+
+| 状態 | 意味 | 動作 |
+|---|---|---|
+| **deprecated** | 将来削除する予定。今はまだ動く | 警告が出るが実行される |
+| **removed** | 削除済み | `ImportError` / `AttributeError` が発生して動かない |
+
+Python の `crypt` 標準ライブラリモジュールは Python 3.12 で deprecated になり、3.13 で removed になった。passlib は内部でこのモジュールを `from crypt import crypt as _crypt` でインポートしているため、Python 3.13 環境ではモジュールロード自体が失敗する。
+
+---
+
+## passlib → bcrypt 直接利用への移行
+
+### 移行の背景
+
+- passlib のメンテナンスが停滞しており、Python 3.13 対応が見込めない
+- passlib は `crypt` 標準ライブラリ（Python 3.13 で削除済み）をモジュールロード時にインポートする
+- bcrypt はすでに `requirements.txt` に入っており、passlib を外してもアルゴリズム自体は変わらない
+
+### bcrypt の直接API
+
+```python
+import bcrypt
+
+# ハッシュ化
+hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+# 検証
+bcrypt.checkpw(plain_password.encode(), hashed_password.encode())  # True / False
+```
+
+| 引数 | 説明 |
+|---|---|
+| `password.encode()` | 文字列 → バイト列に変換（bcrypt は bytes しか受け取らない） |
+| `bcrypt.gensalt()` | ランダムなソルト（毎回異なる）を生成。同じパスワードでも毎回異なるハッシュになる |
+| `.decode()` | バイト列 → 文字列に変換してDBに保存できる形にする |
+
+### passlib との比較
+
+| | passlib | bcrypt 直接 |
+|---|---|---|
+| コード量 | `CryptContext` の設定が必要 | import だけで使える |
+| 柔軟性 | 複数アルゴリズムの切り替えが容易 | bcrypt 固定 |
+| Python 3.13 | 非対応（crypt モジュール依存） | 問題なし |
+
+### `DUMMY_HASH` の変更
+
+タイミング攻撃対策のダミーハッシュも bcrypt で生成するよう変更した。
+
+```python
+# Before（passlib）
+DUMMY_HASH = pwd_context.hash("dummy")
+
+# After（bcrypt 直接）
+DUMMY_HASH = bcrypt.hashpw(b"dummy", bcrypt.gensalt()).decode()
+```
+
+`b"dummy"` はバイトリテラル（バイト列の文字列リテラル）。`"dummy".encode()` と同じ意味。
+
 `PyJWT` をインストールしても `import PyJWT` ではなく `import jwt` と書く。
