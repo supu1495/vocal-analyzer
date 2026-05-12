@@ -121,7 +121,8 @@ crepeを `--no-deps` でインストールしてhmmlearnのpybind11競合を回�
 
 | フェーズ | 内容 |
 |---|---|
-| Phase 7 | 非同期処理（Celery + RedisでDemucs本番復帰） |
+| Phase 7 | 歌唱技法検出・リズム評価・声域計算・スコアマトリクス・ルールベースフィードバック生成 |
+| Phase 8 | 非同期処理（Celery + RedisでDemucs本番復帰） |
 
 ### 技術的負債・将来対応
 
