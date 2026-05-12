@@ -1927,6 +1927,473 @@ GitHubでリポジトリを開いたときに最初に表示されるファイ�
 
 `*.wav` / `*.mp3` / `*.m4a` / `tmp/` — 著作権保護の設計方針（録音音声ファイルは保存しない）に基づき、開発中のテスト用音声ファイルが誤ってGitに入らないようにするための除外指定。
 
+---
+
+## Phase 6: テスト（pytest）
+
+### テストの全体方針
+
+音声分析の精度検証（Crepe・librosa）はスタブ段階のため対象外。**認証・認可・入力バリデーション・正常系の主要フローを優先する。**
+
+```
+backend/tests/
+├── conftest.py          ← テスト全体で使う共通の準備・後片付け
+├── test_auth_utils.py   ← auth_utils.py の単体テスト（JWT・パスワード・ロックアウト）
+└── test_api_auth.py     ← 認証APIエンドポイントのテスト
+```
+
+**単体テスト（Unit Test）** — 1つの関数だけを取り出して「この入力を渡したらこの出力が返るか」を確認するテスト。
+
+**APIテスト（Integration Test）** — FastAPI の全体（ルーティング → バリデーション → DB保存 → レスポンス）を通しで確認するテスト。
+
+**pytest** — `test_` で始まる関数を自動で見つけて実行し、`assert` でチェックするPythonのテストフレームワーク。
+
+```python
+def test_足し算():
+    result = 1 + 1
+    assert result == 2   # 2 でなければテスト失敗
+```
+
+---
+
+### `backend/tests/conftest.py` — テスト共通設定
+
+pytest が自動で読み込む「テスト全体で使う共通の準備・後片付けファイル」。
+
+**テストの2大課題と解決策**
+
+| 課題 | 問題 | 解決策 |
+|---|---|---|
+| DB | 本番のPostgreSQLにテストデータを入れたくない | SQLiteのインメモリDB（テスト専用・毎回リセット）を使う |
+| Redis | テスト中に本物のRedisに繋げたくない | `fakeredis`（偽のRedis）で置き換える |
+
+**SQLite とは**
+
+PostgreSQL と同じリレーショナルDBだが、サーバーが不要なファイル型DB。`sqlite:///:memory:` と指定するとファイルすら作らずメモリ上だけに存在する。テスト終了と同時にデータも消える。
+
+**fakeredis とは**
+
+偽物のRedisサーバーをPythonのメモリ上に作るライブラリ。本物のRedisサーバーなしで `redis-py` の全APIが使える。
+
+**pytest の `fixture`（フィクスチャ）とは**
+
+テストの準備と後片付けを自動でやってくれる仕組み。`yield` が「準備 / テスト / 後片付け」の境界線。
+
+```python
+@pytest.fixture
+def db():
+    # ─── 準備 ───
+    Base.metadata.create_all(bind=engine)
+    session = TestingSessionLocal()
+
+    yield session  # ← テストに渡してここで一時停止
+
+    # ─── 後片付け ───（テスト完了後に自動実行）
+    session.close()
+    Base.metadata.drop_all(bind=engine)
+```
+
+**ファイル全体の構造理解**
+
+| 行 | 内容 |
+|---|---|
+| 22〜28行目 | SQLiteのインメモリDBに繋ぐための設定（`engine` と `TestingSessionLocal`）。この時点ではDBに何も起きていない |
+| 31〜40行目 | `db` fixture — テスト1件ごとに「テーブル作成 → テスト実行 → テーブル削除」を自動でやる動作 |
+| 43〜59行目 | `fake_redis` fixture — 本物のRedisをfakeredisに一時的に差し替えて、テスト終了後に元に戻す |
+| 62〜71行目 | `client` fixture — `db`・`fake_redis`・`TestClient` の3つを組み合わせた統合版。APIを叩くテスト用 |
+
+`db` と `fake_redis` は独立した部品として作ってある。「DBだけ使うテスト（Redisは不要）」では `db` fixture 単体で呼べる。
+
+**セッションファクトリとは**
+
+「セッションを作る工場」。`sessionmaker(...)` の戻り値はクラス（設定済みのセッション生成器）で、`()` で呼び出すとセッションが1つ作られる。
+
+```python
+TestingSessionLocal = sessionmaker(...)  # 工場の設計図（設定）
+session = TestingSessionLocal()          # 工場から出てきた製品（セッション）
+```
+
+**`check_same_thread=False` とは**
+
+SQLite 特有の設定。デフォルトでは1スレッドからしかアクセスできない制限があり、FastAPIのテスト環境ではこれが問題になるため明示的に無効化している。
+
+**`patch` とは**
+
+`unittest.mock.patch` は「テストの間だけ、特定の変数を別のものに差し替えて、テストが終わったら元に戻す」仕組み。
+
+```python
+with patch("auth_utils._redis", fake_r):
+    # このブロック内だけ _redis が fakeredis になる
+    check_lockout("test@example.com")
+# ブロックを出たら元の redis に戻る
+```
+
+**`dependency_overrides`（依存関係のすり替え）とは**
+
+FastAPI の `Depends(get_db)` をテスト用DBに差し替える仕組み。本番は `get_db` を呼んでPostgreSQLに繋ぐが、テスト中はSQLiteに変える。テストが終わったら `dependency_overrides.clear()` で元に戻す。
+
+**`TestClient` とは**
+
+サーバーを起動せずにFastAPIアプリをHTTPリクエストで叩けるクライアント。内部では `httpx` の `ASGITransport` を使い、ネットワーク通信なしでASGIアプリを直接インプロセスで呼び出す。`requests`（別ライブラリ）はASGIアプリへの直接呼び出しに対応していないため、httpxが必要。
+
+**Lua スクリプトの fake_eval について**
+
+`record_login_failure` は `_redis.eval(Luaスクリプト, ...)` を呼んでいる。`fakeredis` のデフォルトはLuaスクリプトの実行に対応していないため、やること（INCR + EXPIRE）と同じ処理をPythonで書いて `eval` メソッドを差し替えている。fakeredisのバージョンによっては不要になる可能性があるため、実際に動かしてエラーにならなければ削除する。
+
+---
+
+### `assert` とは
+
+「この条件が True でなければテスト失敗にする」という Python のキーワード。pytest は `assert` が失敗（`AssertionError` が発生）したテスト関数を「FAILED」として記録する。
+
+```python
+assert res.status_code == 201   # 201 でなければ AssertionError → テスト失敗
+assert "access_token" in res.cookies  # cookies に "access_token" がなければ失敗
+```
+
+`assert` が1行も失敗しなければそのテスト関数は「PASSED」になる。
+
+---
+
+### HTTP ステータスコード一覧
+
+| コード | 名前 | 意味 | このプロジェクトでの用途 |
+|---|---|---|---|
+| **200** | OK | 正常 | GET /me, POST /login 成功 |
+| **201** | Created | 作成成功 | POST /register 成功 |
+| **204** | No Content | 成功・返すデータなし | POST /logout 成功 |
+| **400** | Bad Request | リクエストの内容が不正 | パスワード8文字未満、非対応ファイル形式 |
+| **401** | Unauthorized | 認証失敗・未認証 | 誤パスワード、未ログイン |
+| **403** | Forbidden | 認可失敗（ログインしているが権限なし） | 他人の分析結果にアクセス |
+| **404** | Not Found | リソースが存在しない | 存在しない分析IDを指定 |
+| **409** | Conflict | 競合（すでに存在する） | 重複メールアドレスで登録 |
+| **422** | Unprocessable Entity | バリデーションエラー | FastAPIが自動で返す（必須項目の欠落など）。テスト対象外 |
+| **429** | Too Many Requests | リクエスト過多 | ログイン試行回数上限 |
+
+401 と 403 の違い：401 は「そもそも誰かわからない（未ログイン）」、403 は「ログインはしているが権限がない」。
+
+---
+
+### `backend/tests/test_api_auth.py` — 認証APIのテスト
+
+#### ヘルパー関数
+
+```python
+def _register(client, email="test@example.com", password="password123"):
+    return client.post("/api/v1/auth/register", json={"email": email, "password": password})
+
+def _login(client, email="test@example.com", password="password123"):
+    return client.post("/api/v1/auth/login", json={"email": email, "password": password})
+```
+
+- `client.post(url, json=data)` — TestClient に POST リクエストを送る。`json=` に辞書を渡すと自動で JSON に変換する
+- `email="test@..."` はデフォルト引数。省略すると左の値が使われる。変えたいときだけ上書きする
+- `_` で始まる名前は「このファイルの内部だけで使う補助関数」という慣例。pytest が `test_` で始まる関数だけをテストとして収集するため、ヘルパーは `_` で始める
+- 複数のテストで登録・ログイン処理を書き直さずに済む（DRY の考え方）
+
+#### TestClient でのリクエストとレスポンスの確認方法
+
+| 記述 | 意味 |
+|---|---|
+| `client.post(url, json=data)` | POST リクエストを送る |
+| `client.get(url)` | GET リクエストを送る |
+| `res.status_code` | レスポンスの HTTP ステータスコード（200, 401 など） |
+| `res.json()` | レスポンスボディを JSON → 辞書に変換したもの |
+| `res.json()["email"]` | レスポンスの `email` フィールドを取り出す |
+| `res.cookies` | **このレスポンスで** Set-Cookie されたクッキーの一覧 |
+| `client.cookies` | **TestClient が保持している**クッキーの一覧（リクエスト間で自動維持） |
+| `res.headers["set-cookie"]` | Set-Cookie ヘッダーの生の文字列（`httponly` 属性の確認に使う） |
+
+TestClient をコンテキストマネージャ（`with TestClient(...) as c:`）で使うと、クッキーがリクエスト間で**自動的に維持**される。登録後に `/me` を呼ぶと `access_token` クッキーが自動で付く。
+
+#### `"access_token"` は自分たちが決めた名前
+
+`auth.py` でクッキー名を決めているのは自分たちのコード。
+
+```python
+response.set_cookie(key="access_token", value=token, ...)
+```
+
+`"access_token" in res.cookies` は「このレスポンスで `access_token` という名前のクッキーが発行されたか」を確認している。
+
+#### テスト一覧と意図
+
+**POST /register**
+
+| テスト | 確認すること |
+|---|---|
+| `test_register_success` | 201 が返るか・メールアドレスがレスポンスに含まれるか・クッキーが発行されるか |
+| `test_register_duplicate_email` | 同じメールアドレスで2回登録すると 409 が返るか |
+| `test_register_short_password` | 8文字未満のパスワードで 400 が返るか |
+
+**POST /login**
+
+| テスト | 確認すること |
+|---|---|
+| `test_login_success` | 200 が返るか・クッキーが発行されるか |
+| `test_login_wrong_password` | 間違ったパスワードで 401 が返るか |
+| `test_login_nonexistent_email` | DB に存在しないメールアドレスで 401 が返るか（「未入力」ではなく「登録されていない」） |
+| `test_login_same_error_message_for_wrong_password_and_nonexistent` | 誤パスワードと存在しないメールのエラーメッセージが**同一**か（ユーザー列挙攻撃対策） |
+| `test_login_lockout_after_five_failures` | 5回失敗した後の6回目が 429 になるか |
+| `test_login_clears_lockout_on_success` | ログイン成功後にロックアウトカウンターが削除されるか |
+
+**GET /me**
+
+| テスト | 確認すること |
+|---|---|
+| `test_me_authenticated` | ログイン済みで 200 とメールアドレスが返るか |
+| `test_me_unauthenticated` | クッキーなしで 401 が返るか |
+
+**POST /logout**
+
+| テスト | 確認すること |
+|---|---|
+| `test_logout_clears_cookie` | 204 が返るか・ログアウト後に /me が 401 になるか |
+
+#### ロックアウトのカウンターと 429 の関係
+
+auth.py のログイン処理順：
+
+```
+1回目: check_lockout(count=0, OK) → 失敗 → record(count=1) → 401
+2回目: check_lockout(count=1, OK) → 失敗 → record(count=2) → 401
+...
+5回目: check_lockout(count=4, OK) → 失敗 → record(count=5) → 401
+6回目: check_lockout(count=5, LOCKED) → 429  ← ここで弾かれる
+```
+
+`check_lockout` はログイン処理の**最初**に呼ばれる。5回失敗した後の6回目が 429 になる。
+
+#### `for _ in range(5):` の `_`
+
+```python
+for _ in range(5):
+    _login(client, password="wrong")
+```
+
+`range(5)` は `[0, 1, 2, 3, 4]` を生成する。`for i in range(5):` のように書くとループ変数 `i` が作られるが、ここでは **5回繰り返したいだけ**でループ変数の値を使わない。`_` は「意図的に使わない」という Python の慣例。使わない変数を `i` と書くとエディタが「未使用の変数」と警告するため `_` で抑制する。
+
+#### `test_login_clears_lockout_on_success` での fake_redis 直接参照
+
+```python
+def test_login_clears_lockout_on_success(client, fake_redis):
+    _register(client)
+    for _ in range(4):
+        _login(client, password="wrong")
+    _login(client)  # 正しいパスワードで成功 → clear_lockout() が内部で呼ばれる
+    assert fake_redis.get("login_fail:test@example.com") is None
+```
+
+- API のレスポンスだけでは「カウンターが消えた」は確認できないため、fakeredis を**直接覗いて確認**する
+- `client` と `fake_redis` を両方引数に書くと、pytest が**同じ fakeredis インスタンス**を両方に渡す。そのためテスト関数内から `fake_redis.get(...)` でカウンターの状態を確認できる
+
+#### test_logout の仕組み
+
+`delete_cookie` はサーバーが `Set-Cookie: access_token=; Max-Age=0` をレスポンスに付ける。TestClient がこれを処理してクッキーを削除するので、次の `/me` リクエストにはクッキーが付かず 401 が返る。
+
+#### base_url="https://testserver" が必要な理由
+
+auth.py で `set_cookie(..., secure=True)` を指定している。`Secure` 属性は「HTTPS でしか送らない」クッキーを意味する。TestClient のデフォルト URL は `http://testserver`（HTTP）なので、httpx が「HTTP だから Secure クッキーは送らない」と判断してリクエストにクッキーが付かなくなる。`base_url="https://testserver"` にすることで TestClient が HTTPS として扱い、クッキーが正しく送受信される。実際にはサーバーを起動していないため、本物の HTTPS 通信ではなく「URL のスキームが `https` である」という情報だけを使って制御している。
+
+#### httpOnly 属性の確認テスト
+
+SPEC.md には「httpOnly Cookie がセットされるか」という確認項目がある。クッキーの存在確認だけでは不十分で、`httponly` 属性があるかも確認する必要がある。
+
+```python
+assert "httponly" in res.headers["set-cookie"].lower()
+```
+
+`res.headers["set-cookie"]` で Set-Cookie ヘッダーの生の文字列（例: `access_token=eyJ...; HttpOnly; Secure; ...`）を取り出し、`httponly` という文字列が含まれるかを確認する。`.lower()` で小文字に統一してから確認するのは、サーバーが `HttpOnly` と `httponly` どちらで返しても対応するため。`test_login_success` に追加済み。
+
+---
+
+### `backend/tests/test_api_analysis.py` — 分析APIのテスト
+
+#### なぜ `audio_analyzer.analyze()` をモックするのか
+
+`analyze()` は Crepe（AIモデル）+ librosa を使う。テストで本物を実行すると：
+- 重い（数秒かかる）
+- 本物の音声ファイルが必要
+- TensorFlow の初期化が走る
+
+テストの目的は「APIのルーティング・認証・DB保存・レスポンス形式が正しいか」。分析エンジン自体の正しさはここでは確認しない。なので `analyze()` をモックしてダミーデータを返す。
+
+#### `_MOCK_ANALYSIS` — ダミーデータの構造（16〜22行目）
+
+```python
+_MOCK_ANALYSIS = {
+    "pitch_accuracy": 75.0,
+    "rhythm_score": 0.0,
+    "techniques": {},
+    "vocal_range": {"lowest": None, "highest": None, "range_semitones": 0},
+    "feedback": "テストフィードバック",
+}
+```
+
+`analyzer.py` の `analyze()` が返す辞書と**キーの名前を合わせる**必要がある。`_save_to_db()` が `analysis_data.get("pitch_accuracy")` のようにキー名を指定して取り出すため、キーが違うと `None` が保存されてしまう。
+
+モジュールの先頭（関数の外）に置くことで、ファイル内の全テストから参照できる。
+
+#### `_create_minimal_wav()` — WAV ファイルをメモリで作る（24〜32行目）
+
+```python
+def _create_minimal_wav() -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav_file:
+        wav_file.setnchannels(1)      # モノラル（ステレオは2）
+        wav_file.setsampwidth(2)      # 16bit（1サンプル = 2バイト）
+        wav_file.setframerate(44100)  # サンプリングレート 44100Hz
+        wav_file.writeframes(b"\x00" * 200)
+    return buf.getvalue()
+```
+
+- `io.BytesIO()` はメモリ上のバッファ。ファイルのように読み書きできるがディスクに何も書かない。`io` は Python 標準ライブラリ
+- `wave` は Python 標準の WAV ファイル操作ライブラリ。`"wb"` は「書き込みモード（write binary）」。`buf` にファイルの代わりに渡すことでメモリ上に書く
+- WAV ファイルには「チャンネル数・ビット深度・サンプリングレート」というヘッダー情報が必要。`setnchannels` / `setsampwidth` / `setframerate` でそれぞれ設定する
+- 中身（音声データ）はゼロ（無音）でよく、librosa が読める形式かどうかだけが重要
+- `wav_file.writeframes(b"\x00" * 200)` で 200 フレームぶんのゼロデータを書き込む
+- `buf.getvalue()` でバッファに書き込まれた全バイト列を返す。戻り値の型ヒント `-> bytes` は「バイト列を返す」という宣言
+
+#### `_register_and_login()`（34〜35行目）
+
+```python
+def _register_and_login(client, email="test@example.com", password="password123"):
+    client.post("/api/v1/auth/register", json={"email": email, "password": password})
+```
+
+戻り値（`return`）が**ない**。これはレスポンスを確認せず「登録してクッキーをセットするだけ」の目的で呼ぶためで、後続のテストで認証が必要な操作をするための前準備。`test_api_auth.py` の `_register` は `return` しているが、こちらは「分析テストの準備」に特化したヘルパーなので戻り値不要。
+
+#### `_upload()`（38〜44行目）
+
+```python
+def _upload(client, filename="test.wav", content_type="audio/wav", content=None):
+    if content is None:
+        content = _create_minimal_wav()
+    return client.post(
+        "/api/v1/analysis/upload",
+        files={"audio_file": (filename, content, content_type)},
+    )
+```
+
+- `content=None` はデフォルトで「省略されたら WAV を自動生成する」パターン。大きいファイルのテストや別形式のテストなど「自分でデータを渡したい場合」だけ `content=` を指定する
+
+**`files=` でファイルを送る**
+
+`files=` は JSON ではなくファイルを送るときのパラメータ。タプルの構造は `(ファイル名, バイト列, MIMEタイプ)`。
+
+```python
+files={"audio_file": ("test.wav", file_content, "audio/wav")}
+#              ↑フィールド名   ↑ファイル名    ↑中身   ↑MIMEタイプ
+```
+
+バックエンドの `audio_file: UploadFile = File(...)` と辞書のキー名（`"audio_file"`）を一致させる必要がある。名前が違うとサーバーがファイルを受け取れずエラーになる。
+
+#### `patch` の書き方（58〜60行目）
+
+```python
+with patch("api.analysis.audio_analyzer.analyze", return_value=dict(_MOCK_ANALYSIS)):
+    res = _upload(client)
+```
+
+- `"api.analysis.audio_analyzer.analyze"` — `api/analysis.py` の中にあるグローバル変数 `audio_analyzer`（`AudioAnalyzer` のインスタンス）の `.analyze` メソッドを指定する。`api.analysis` はモジュールパス（ファイルの場所）、`audio_analyzer` はそのファイルの中の変数名、`analyze` はそのメソッド名
+- `return_value=dict(_MOCK_ANALYSIS)` — `analyze()` が呼ばれたとき、実際の処理をせずこの辞書を返す
+- `dict(_MOCK_ANALYSIS)` は `_MOCK_ANALYSIS` のシャローコピー。`_run_analysis()` の中で `result["song_title"] = song_title` と辞書を書き換えるため、元の `_MOCK_ANALYSIS` が変更されないようにコピーを渡す。コピーしないと2回目以降のテストで `_MOCK_ANALYSIS` に `song_title` が残って意図しない状態になる
+- `with` ブロックを抜けると `analyze` は元の本物の処理に戻る
+
+#### `test_upload_file_too_large`（52〜55行目）
+
+```python
+def test_upload_file_too_large(client):
+    _register_and_login(client)
+    oversized = b"\x00" * (50 * 1024 * 1024 + 1)
+    res = _upload(client, content=oversized)
+    assert res.status_code == 400
+```
+
+- `b"\x00" * (50 * 1024 * 1024 + 1)` — 50MB + 1バイト = 52,428,801バイトのゼロ埋めデータ。`_validate_file_size()` の条件 `len(content) > max_size` を満たすために 1バイト超過させている
+- `content=` を指定しているので WAV の自動生成は行われない。`content_type` はデフォルト `"audio/wav"` のため、ファイル形式チェックは通り、サイズチェックで 400 が返る
+
+#### `test_get_analysis_success`（63〜68行目）
+
+```python
+def test_get_analysis_success(client):
+    _register_and_login(client)
+    with patch("api.analysis.audio_analyzer.analyze", return_value=dict(_MOCK_ANALYSIS)):
+        analysis_id = _upload(client).json()["analysis_id"]
+
+    res = client.get(f"/api/v1/analysis/{analysis_id}")
+    assert res.status_code == 200
+    assert res.json()["analysis_id"] == analysis_id
+```
+
+- `_upload(client).json()["analysis_id"]` — アップロードのレスポンスから `analysis_id` を取り出して変数に入れる。1行でつなげて書けるのはメソッドチェーンのため
+- `patch` ブロックは `_upload` の呼び出しだけを囲んでいる。その後の GET リクエストには分析処理は走らないので `patch` は不要
+- `f"/api/v1/analysis/{analysis_id}"` の `f""` はf文字列。`{}` の中に変数を書くと文字列に埋め込まれる（例: `analysis_id=5` なら `"/api/v1/analysis/5"` になる）
+
+#### `test_get_analysis_unauthenticated`（70〜76行目）
+
+```python
+def test_get_analysis_unauthenticated(client):
+    _register_and_login(client)
+    with patch(...):
+        analysis_id = _upload(client).json()["analysis_id"]
+
+    client.post("/api/v1/auth/logout")
+    res = client.get(f"/api/v1/analysis/{analysis_id}")
+    assert res.status_code == 401
+```
+
+「アップロードしたが、その後ログアウトしてからアクセスすると 401」という流れ。登録→アップロードしてデータを作ってから、ログアウトして未認証状態にして確認する。
+
+#### 2ユーザーを使う 403 テスト（78〜86行目）
+
+```python
+def test_get_analysis_other_user_returns_403(client):
+    _register_and_login(client, email="user_a@example.com")
+    with patch(...):
+        analysis_id = _upload(client).json()["analysis_id"]
+
+    client.post("/api/v1/auth/logout")
+    _register_and_login(client, email="user_b@example.com")
+    res = client.get(f"/api/v1/analysis/{analysis_id}")
+    assert res.status_code == 403
+```
+
+同じ `client` を使ってユーザーを切り替えている：
+1. User A でログインしてアップロード → `analysis_id` を取得
+2. ログアウト（クッキーを削除）
+3. User B で登録・ログイン（クッキーが User B のものに変わる）
+4. User A の `analysis_id` に User B でアクセス → 403
+
+これで「他人のデータに触れられないか（認可）」を確認できる。
+
+#### テスト一覧と意図
+
+**POST /upload**
+
+| テスト | 確認すること |
+|---|---|
+| `test_upload_unauthenticated` | 未認証で 401 が返るか |
+| `test_upload_invalid_file_type` | 非対応MIMEタイプで 400 が返るか |
+| `test_upload_file_too_large` | 50MB超過で 400 が返るか |
+| `test_upload_success` | 認証済み・有効ファイルで 200 と `analysis_id` が返るか |
+
+**GET /{analysis_id}**
+
+| テスト | 確認すること |
+|---|---|
+| `test_get_analysis_success` | 自分の分析結果が正しく返るか |
+| `test_get_analysis_unauthenticated` | 未認証で 401 が返るか |
+| `test_get_analysis_not_found` | 存在しない ID で 404 が返るか |
+| `test_get_analysis_other_user_returns_403` | 他ユーザーの結果 ID で 403 が返るか |
+
+**GET /user/statistics**
+
+| テスト | 確認すること |
+|---|---|
+| `test_get_statistics_authenticated` | 認証済みで `history` / `total_count` が含まれるか |
+| `test_get_statistics_unauthenticated` | 未認証で 401 が返るか |
+
 ## `nginx/default.conf` — リバースプロキシの設定
 
 `server { }` が1つのサーバー定義で、その中に `location { }` が2つある。

@@ -19,3 +19,8 @@ torch==2.1.2
 torchaudio==2.1.2
 tensorflow==2.15.0
 resampy==0.2.2
+
+# テスト用
+pytest==8.3.5
+httpx==0.27.0
+fakeredis==2.26.2
