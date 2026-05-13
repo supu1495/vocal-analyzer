@@ -10,6 +10,10 @@ import librosa  # hz_to_midi による周波数→半音変換に使用
 _LONG_TONE_MIN_SECONDS = 1.0      # ロングトーン判定の最短持続時間（秒）。DAM・ジョイサウンドは0.5秒だが本プロダクトは厳格な判定を採用
 _LONG_TONE_PITCH_THRESHOLD = 0.5  # ロングトーン中の最大ピッチ変動（半音単位）
 
+_SHAKURI_MIN_CENTS = 50.0         # しゃくり判定の最小上昇幅（セント）。これ未満は通常の発声として無視する
+_SHAKURI_MAX_CENTS = 200.0        # しゃくり判定の最大上昇幅（セント）。これを超える変化は体力不足・感情表現として除外
+_SHAKURI_SETTLE_FRAMES = 5        # 安定音程を推定するフレーム数（発声開始の次フレームから最大この数だけ見る）
+
 
 class TechniqueDetector:
     """
@@ -88,8 +92,49 @@ class TechniqueDetector:
                 "avg_height": 平均上昇幅（cent）
             }
         """
-        # TODO: 音の始まりの上昇パターンを検出する
-        return {"count": 0, "avg_height": 0.0}
+        times = np.array(pitch_data["times"])
+        frequencies = np.array(pitch_data["frequencies"])
+        confidence = np.array(pitch_data["confidence"])
+
+        if len(times) < 2:
+            return {"count": 0, "avg_height": 0.0}
+
+        reliable = (confidence > 0.5) & (frequencies > 0)
+        midi_notes = np.where(reliable, librosa.hz_to_midi(np.maximum(frequencies, 1e-6)), np.nan)
+
+        shakuris = []
+
+        for i in range(1, len(midi_notes)):
+            # NaN → 有効MIDI の切り替わり（発声開始）を探す
+            if not np.isnan(midi_notes[i - 1]) or np.isnan(midi_notes[i]):
+                continue
+
+            start_pitch = midi_notes[i]
+
+            # 発声開始の次フレームから最大 _SHAKURI_SETTLE_FRAMES 個の有効フレームで安定音程を推定する
+            settle_end = min(i + 1 + _SHAKURI_SETTLE_FRAMES, len(midi_notes))
+            settle_frames = [
+                midi_notes[j]
+                for j in range(i + 1, settle_end)
+                if not np.isnan(midi_notes[j])
+            ]
+
+            if len(settle_frames) < 2:
+                continue
+
+            settled_pitch = float(np.mean(settle_frames))
+            rise_cents = (settled_pitch - start_pitch) * 100.0
+
+            if _SHAKURI_MIN_CENTS <= rise_cents <= _SHAKURI_MAX_CENTS:
+                shakuris.append(rise_cents)
+
+        if not shakuris:
+            return {"count": 0, "avg_height": 0.0}
+
+        return {
+            "count": len(shakuris),
+            "avg_height": float(np.mean(shakuris)),
+        }
 
     def detect_long_tone(self, pitch_data: dict) -> dict:
         """
