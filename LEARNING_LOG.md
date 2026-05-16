@@ -3240,4 +3240,37 @@ float(np.mean([lt["seconds"] for lt in long_tones]))
 | `duration`（ローカル変数） | `segment_seconds` | 「区間の秒数」という意味を明確にする |
 | `"avg_duration"`（辞書キー） | `"avg_tone_seconds"` | 単位と対象（ロングトーン）を明示する |
 
+---
+
+## Alembic マイグレーション — スコアマトリクスのカラム追加
+
+### マイグレーションファイルの構造
+
+Alembic のマイグレーションファイルは以下の要素で構成される。
+
+```python
+revision: str = 'b2c3d4e5f6a7'   # このマイグレーション自身の ID
+down_revision = 'a1b2c3d4e5f6'    # 1つ前の ID。ここで実行順序が決まる（チェーン構造）
+branch_labels = None               # 並列ブランチ管理用（通常は使わない）
+depends_on = None                  # 別マイグレーションへの依存（通常は使わない）
+```
+
+`upgrade()` → `alembic upgrade head` で呼ばれる（カラム追加など）
+`downgrade()` → `alembic downgrade -1` で呼ばれる（upgrade の逆操作）
+
+`op.add_column()` / `op.drop_column()` は `from alembic import op` で使えるメソッド。
+`sa.Column()` / `sa.Float()` は `import sqlalchemy as sa` で使えるカラム型定義。
+
+### 追加したカラム（analysis_results テーブル）
+
+| カラム | 型 | 内容 |
+|---|---|---|
+| total_score | FLOAT nullable | 総合スコア |
+| faithfulness_score | FLOAT nullable | 基本忠実度（pitch×0.7 + rhythm×0.3） |
+| technique_score | FLOAT nullable | 技法スコア |
+| naturalness_penalty | FLOAT nullable | 棒読みペナルティ |
+
+スコアは 0〜100 に縛らず、上限なしの生の計算値をそのまま保存する方針。
+将来のダッシュボードでユーザーの成長推移を表示するためにDBに保存する。
+
 `PyJWT` をインストールしても `import PyJWT` ではなく `import jwt` と書く。

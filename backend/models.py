@@ -76,6 +76,12 @@ class AnalysisResult(Base):
     # 音域: {"min_hz": 130.0, "max_hz": 880.0} のような辞書
     vocal_range: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # スコアマトリクス（上限なし・生の計算値をそのまま保存する）
+    total_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    faithfulness_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    technique_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    naturalness_penalty: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     # AIフィードバックテキスト
     feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
 
