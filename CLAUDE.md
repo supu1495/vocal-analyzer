@@ -79,12 +79,19 @@
 - `backend/tests/test_api_analysis.py`: 分析APIエンドポイントのテスト（upload / get / statistics）
 - 34テスト全pass確認済み
 
+### Phase 7: 音声分析エンジン本実装 ✅
+- `backend/audio/techniques.py`: 歌唱技法検出を全実装（ビブラート・こぶし・フォール・しゃくり・ロングトーン）
+- `backend/audio/analyzer.py`: 声域計算・リズム評価・スコアマトリクス・ルールベースフィードバック生成を実装
+- `backend/models.py` + Alembicマイグレーション: `analysis_results` に4カラム追加（`total_score` / `faithfulness_score` / `technique_score` / `naturalness_penalty`）
+- `backend/api/analysis.py`: `_save_to_db` に新スコアの保存を追加
+- 34テスト全pass確認済み
+
 ---
 
 ## 現在の状態
 
 - **作業ブランチ**: `main`
-- **mainブランチ**: Phase 6まで全てマージ済み
+- **mainブランチ**: Phase 7まで全てマージ済み
 - **ローカル動作確認**: Docker Compose で全5サービス起動確認済み（2026-03-26）
 - **注意**: port 80 はホスト側の Apache が競合する場合あり。その場合は `http://localhost:5173` に直接アクセス
 
@@ -119,12 +126,12 @@ crepeを `--no-deps` でインストールしてhmmlearnのpybind11競合を回�
 
 ## 次にやるべきこと
 
-### Phase 7以降
+### Phase 8以降
 
 | フェーズ | 内容 |
 |---|---|
-| Phase 7 | 歌唱技法検出・リズム評価・声域計算・スコアマトリクス・ルールベースフィードバック生成 |
 | Phase 8 | 非同期処理（Celery + RedisでDemucs本番復帰） |
+| Phase 9 | 本番環境デプロイ |
 
 ### 技術的負債・将来対応
 
