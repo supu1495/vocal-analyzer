@@ -167,6 +167,7 @@ def _save_to_db(
     db: Session, song_title: str, artist_name: str, analysis_data: dict, user_id: int
 ) -> AnalysisResult:
     """分析結果をPostgreSQLに保存してcommitする"""
+    score_matrix = analysis_data.get("score_matrix", {})
     record = AnalysisResult(
         user_id=user_id,
         song_title=song_title,
@@ -175,6 +176,10 @@ def _save_to_db(
         rhythm_score=analysis_data.get("rhythm_score"),
         techniques=analysis_data.get("techniques"),
         vocal_range=analysis_data.get("vocal_range"),
+        total_score=score_matrix.get("total_score"),
+        faithfulness_score=score_matrix.get("faithfulness_score"),
+        technique_score=score_matrix.get("technique_score"),
+        naturalness_penalty=score_matrix.get("naturalness_penalty"),
         feedback=analysis_data.get("feedback"),
     )
     db.add(record)
