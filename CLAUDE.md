@@ -83,16 +83,26 @@
 - `backend/audio/techniques.py`: 歌唱技法検出を全実装（ビブラート・こぶし・フォール・しゃくり・ロングトーン）
 - `backend/audio/analyzer.py`: 声域計算・リズム評価・スコアマトリクス・ルールベースフィードバック生成を実装
 - `backend/models.py` + Alembicマイグレーション: `analysis_results` に4カラム追加（`total_score` / `faithfulness_score` / `technique_score` / `naturalness_penalty`）
-- `backend/api/analysis.py`: `_save_to_db` に新スコアの保存を追加
 - 34テスト全pass確認済み
+
+### Phase 8: 非同期処理（Celery）・Demucs本番実装 ✅
+- `backend/celery_app.py`: Celeryアプリ設定（Broker: Redis DB0 / Backend: Redis DB1）
+- `backend/tasks.py`: `analyze_audio_task` Celeryタスク（分析実行・DB保存・一時ファイル削除）
+- `backend/audio/separator.py`: スタブ実装 → Demucs v4（htdemucs）による本番実装に変更
+- `backend/api/analysis.py`: 同期分析 → タスク登録（`.delay()`）方式に変更。`GET /status/{task_id}` エンドポイント追加
+- `backend/audio/analyzer.py`: `_calculate_rhythm_score` の死んだコード（else分岐）を削除
+- `docker-compose.yml`: `celery_worker` サービス追加・`vocal_uploads` 共有ボリューム追加
+- `backend/requirements.txt`: `celery==5.3.6` 追加
+- `backend/tests/test_api_analysis.py`: モック対象を `analyze_audio_task.delay` に変更・ステータス確認テスト3件追加
+- 37テスト全pass確認済み
 
 ---
 
 ## 現在の状態
 
 - **作業ブランチ**: `main`
-- **mainブランチ**: Phase 7まで全てマージ済み
-- **ローカル動作確認**: Docker Compose で全5サービス起動確認済み（2026-03-26）
+- **mainブランチ**: Phase 8まで全てマージ済み
+- **ローカル動作確認**: Docker Compose で全6サービス起動確認済み（2026-05-18）
 - **注意**: port 80 はホスト側の Apache が競合する場合あり。その場合は `http://localhost:5173` に直接アクセス
 
 ---
@@ -101,7 +111,7 @@
 
 **著作権保護:** 録音音声ファイルは保存しない。分析結果のみPostgreSQLに保存。
 
-**Demucsのスタブ化（一時的）:** CPUでの処理が遅すぎるため、Celery非同期処理実装後に本番復帰予定。現在は `backend/audio/separator.py` がlibrosで音声をそのままボーカルとして返すスタブ実装。
+**Demucs本番実装済み（Phase 8）:** `backend/audio/separator.py` は Demucs v4（htdemucs）による本番実装に変更済み。Celery Worker コンテナで非同期実行するため CPU 処理の遅さはユーザー体験に影響しない。
 
 **Crepe採用:** 精度重視のためlibrosa.pyinへの変更はしない。
 
@@ -126,18 +136,19 @@ crepeを `--no-deps` でインストールしてhmmlearnのpybind11競合を回�
 
 ## 次にやるべきこと
 
-### Phase 8以降
+### Phase 9以降
 
 | フェーズ | 内容 |
 |---|---|
-| Phase 8 | 非同期処理（Celery + RedisでDemucs本番復帰） |
 | Phase 9 | 本番環境デプロイ |
+| Phase 10 | 精度確認（実際のカラオケ録音を使った検出精度の検証） |
+| Phase 11 | 時系列成長分析（録音日時の手動入力・スコア推移・練習継続率の可視化） |
 
 ### 技術的負債・将来対応
 
 - **本番環境の接続情報管理**: `.env.example` の `DATABASE_URL` / `REDIS_URL` は開発用のデフォルト値がそのまま書かれている。本番デプロイ時には環境変数またはAWS Secrets Managerなどのシークレット管理ツールで注入すること（`POSTGRES_PASSWORD` のハードコードも同様）
 - **PC版UI実装**: 現状はスマートフォン向けレイアウト。PC向けレスポンシブ対応またはPC専用レイアウトを追加する
-- **複数ファイル一括アップロード・日付指定機能**: 複数の音声ファイルを一度に投下する機能、および録音日時を手動で指定して登録する機能
+- **複数ファイル一括アップロード・日付指定機能**: 複数の音声ファイルを一度に投下する機能、および録音日時を手動で指定して登録する機能（後日まとめてアップロードしても正しい日時で記録できるようにする。Phase 11 の時系列成長分析と合わせて実装予定）
 - **アクセント・ハンマリング検出**: DAM AI HEART を参考に追加予定の歌唱技法。Phase 7完了後に検討（詳細は SPEC.md「将来検討」参照）
 - **分析進捗表示**: 解析中の残り時間・プログレスバーをUIに表示。Phase 8（Celery非同期）と連動して実装
 - **録音ガイドUI**: 音量・距離・ノイズを視覚的にチェックする機能。カラオケ機器の機種差による品質ばらつきを軽減する目的
@@ -157,6 +168,8 @@ vocal-analyzer/
 │   ├── main.py                      # FastAPIアプリ本体
 │   ├── database.py                  # SQLAlchemy接続・get_db()
 │   ├── models.py                    # DBモデル（User / AnalysisResult）
+│   ├── celery_app.py                # Celeryアプリ設定（Broker: Redis DB0 / Backend: Redis DB1）
+│   ├── tasks.py                     # Celeryタスク（analyze_audio_task）
 │   ├── requirements.txt
 │   ├── alembic.ini
 │   ├── alembic/
@@ -168,7 +181,7 @@ vocal-analyzer/
 │   │   └── analysis.py              # 分析APIエンドポイント
 │   ├── audio/
 │   │   ├── analyzer.py              # 分析司令塔
-│   │   ├── separator.py             # 音源分離（現在スタブ）
+│   │   ├── separator.py             # 音源分離（Demucs v4 本番実装）
 │   │   ├── pitch.py                 # Crepeピッチ検出
 │   │   └── techniques.py            # 歌唱技法検出
 │   └── tests/
@@ -256,3 +269,20 @@ vocal-analyzer/
   - `hash_password`: `bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()`
   - `verify_password`: `bcrypt.checkpw(plain_password.encode(), hashed_password.encode())`
   - `DUMMY_HASH`: `bcrypt.hashpw(b"dummy", bcrypt.gensalt()).decode()`
+
+### 2026-05-18 Phase 8: 非同期処理（Celery）・Demucs本番実装
+- `backend/celery_app.py`: 新規作成。Celeryアプリ設定（Broker: Redis DB0 / Backend: Redis DB1 / JSON シリアライザー）
+- `backend/tasks.py`: 新規作成。`analyze_audio_task` Celeryタスク（分析・DB保存・一時ファイル削除）
+- `backend/audio/separator.py`: librosa スタブ → Demucs v4（htdemucs）本番実装に変更
+- `backend/api/analysis.py`: 同期分析処理を削除し `.delay()` によるタスク登録方式に変更
+  - `upload_audio`: ファイルを共有ボリュームに書き込み → `analyze_audio_task.delay()` → `task_id` 返却
+  - `GET /status/{task_id}` エンドポイント新規追加（`AsyncResult` でステータス確認）
+- `backend/audio/analyzer.py`: `_calculate_rhythm_score` の else 分岐（死んだコード）を削除
+  - Demucs 出力が常にステレオのため `mono = vocals.mean(axis=0)` のみに
+- `docker-compose.yml`: `celery_worker` サービス追加・`vocal_uploads` 共有ボリューム追加
+- `backend/requirements.txt`: `celery==5.3.6` 追加
+- `backend/tests/test_api_analysis.py`: Phase 8 の API 変更に対応してテストを書き直し
+  - モック対象: `audio_analyzer.analyze` → `analyze_audio_task.delay`
+  - `_create_analysis_record()` ヘルパー追加（Worker なしでDB直接作成）
+  - ステータス確認テスト3件追加（`test_get_analysis_status_*`）
+  - 37テスト全pass確認済み（Phase 7: 34テスト → +3）

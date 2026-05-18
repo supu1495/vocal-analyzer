@@ -40,7 +40,12 @@ vocal-analyzerの製品要件・設計上の決定事項・将来方針をまと
 | ピッチ分析 | Crepeによるフレームごとのピッチ検出・安定性スコア（0〜100） |
 | 分析結果保存 | PostgreSQLに保存。音声ファイルは即時削除 |
 | 統計ダッシュボード | 過去の分析結果の推移グラフ |
-| バックエンドテスト | pytest による認証・認可・分析APIのテスト（34テスト） |
+| バックエンドテスト | pytest による認証・認可・分析APIのテスト（37テスト） |
+| 歌唱技法検出 | ビブラート・こぶし・フォール・しゃくり・ロングトーン（Phase 7） |
+| スコアマトリクス | faithfulness / technique / naturalness_penalty / total_score（Phase 7） |
+| ルールベースフィードバック | 歌唱特性・改善点・伸ばすべきポイントの3セクション（Phase 7） |
+| 非同期処理 | Celery + Redis によるタスクキュー。upload は task_id を即返却（Phase 8） |
+| 音源分離 | Demucs v4（htdemucs）による4トラック分離（Phase 8） |
 
 ### 実装予定
 
@@ -51,8 +56,11 @@ vocal-analyzerの製品要件・設計上の決定事項・将来方針をまと
 | Phase 7 | 声域計算 | ✅ 実装済み（最低音・最高音・半音数） |
 | Phase 7 | スコアマトリクス実装 | ✅ 実装済み（faithfulness / technique / naturalness_penalty / total_score） |
 | Phase 7 | ルールベースフィードバック生成 | ✅ 実装済み（歌唱特性・改善点・伸ばすべきポイントの3セクション） |
-| Phase 8 | 非同期処理（Celery） | Demucs復帰の前提 |
-| Phase 8 | Demucs音源分離 | CPUが遅いためCelery実装後に本番復帰 |
+| Phase 8 | 非同期処理（Celery） | ✅ 実装済み（Broker: Redis DB0 / Backend: Redis DB1 / analyze_audio_task） |
+| Phase 8 | Demucs音源分離 | ✅ 実装済み（htdemucs モデルで4トラック分離・Celery Worker で非同期実行） |
+| Phase 9 | 本番環境デプロイ | |
+| Phase 10 | 精度確認 | 実際のカラオケ録音を使った検出精度の検証。現状テストはモックベースで実音声未テスト |
+| Phase 11 | 時系列成長分析 | 録音日時の手動入力（`recorded_at` カラム追加）・スコア推移・セッション間隔・練習継続率の可視化 |
 
 ### 将来検討（優先度低・時期未定）
 

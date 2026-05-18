@@ -18,6 +18,8 @@
 - **スコアマトリクス** — 基本忠実度・技法スコア・不自然さペナルティ・総合スコアを算出
 - **フィードバック生成** — スコアと技法データをもとにルールベースで改善アドバイスを生成
 - **分析結果の保存** — 結果のみPostgreSQLに保存（音声ファイルは即時削除）
+- **非同期処理** — Celery + Redis によるタスクキュー。アップロード後すぐにレスポンスを返し、バックグラウンドで分析を実行
+- **音源分離** — Demucs v4（htdemucs）でカラオケ録音からボーカルを自動抽出
 - **統計ダッシュボード** — 過去の分析結果の推移を可視化
 
 <img width="452" height="713" alt="image" src="https://github.com/user-attachments/assets/a11b8a8d-b3d4-4a89-9a98-d4728322545e" />
@@ -28,9 +30,9 @@
 
 ## 開発予定の機能
 
-- **音源分離（Demucs）** — カラオケ録音からのボーカル自動抽出（現在はスタブ・非同期処理実装後に復帰）
 - **おすすめ楽曲提案** — 声域・歌唱スタイルに合った楽曲の提案
 - **非ログインでの分析** — ゲストユーザーによる分析機能
+- **時系列成長分析** — 録音日時・スコア推移・練習継続率の可視化
 
 ---
 
@@ -40,7 +42,8 @@
 |---|---|
 | フロントエンド | TypeScript、React、Vite |
 | バックエンド | Python 3.11、FastAPI |
-| 音声処理 | Crepe、librosa、Demucs v4（実装予定）、PyTorch |
+| 音声処理 | Crepe、librosa、Demucs v4、PyTorch |
+| 非同期処理 | Celery、Redis |
 | データベース | PostgreSQL 15 |
 | キャッシュ / ロックアウト | Redis 7 |
 | 認証 | JWT（httpOnly Cookie）、bcrypt |
@@ -88,7 +91,8 @@ docker compose up --build
 
 | メソッド | エンドポイント | 説明 | 認証 |
 |---|---|---|---|
-| `POST` | `/api/v1/analysis/upload` | 音声をアップロードして分析 | 必須 |
+| `POST` | `/api/v1/analysis/upload` | 音声をアップロードしてタスク登録（task_id を返す） | 必須 |
+| `GET` | `/api/v1/analysis/status/{task_id}` | 分析タスクのステータス確認 | 必須 |
 | `GET` | `/api/v1/analysis/{id}` | 分析結果を取得 | 必須 |
 | `GET` | `/api/v1/analysis/user/statistics` | ユーザーの統計・進捗を取得 | 必須 |
 
@@ -114,8 +118,10 @@ docker compose up --build
 | Phase 5 | 認証（JWT / httpOnly Cookie / Redisロックアウト） | ✅ 完了 |
 | Phase 6 | テスト（pytest・APIテスト） | ✅ 完了 |
 | Phase 7 | 音声分析コア実装（技法検出・リズム・声域・スコアマトリクス・フィードバック） | ✅ 完了 |
-| Phase 8 | 非同期処理（Celery + Demucs本番復帰） | 🔲 予定 |
+| Phase 8 | 非同期処理（Celery + Demucs本番復帰） | ✅ 完了 |
 | Phase 9 | 本番環境デプロイ | 🔲 予定 |
+| Phase 10 | 精度確認（実音声での検出精度検証） | 🔲 予定 |
+| Phase 11 | 時系列成長分析（録音日時・スコア推移・練習継続率） | 🔲 予定 |
 
 ---
 

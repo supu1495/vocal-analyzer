@@ -3416,3 +3416,209 @@ Python の連鎖比較。`A <= x <= B` は `A <= x and x <= B` と同じ意味�
 - しゃくりとは別の技法
 
 現段階では未分類のまま除外。将来は「感情表現強度」の別指標として検出できると望ましい。SPEC.md の技術的負債に記録済み。
+
+---
+
+## Phase 8: 非同期処理（Celery）・Demucs本番実装（2026-05-18）
+
+### 学習テーマ
+
+- Celery によるタスクキュー（非同期処理）
+- Docker 共有ボリューム
+- Demucs v4 の本番実装
+- テストにおけるモック（Mock）
+
+---
+
+### Celery とは
+
+**Celery** は Python の非同期タスクキューライブラリ。
+
+音声分析のように「処理に数十秒〜数分かかる重い処理」を Web API から切り離して別プロセスで実行するために使う。API が即座にレスポンスを返せるようになり、タイムアウトやブラウザのフリーズを防げる。
+
+#### 4役の登場人物
+
+| 役割 | 担当 | 説明 |
+|---|---|---|
+| **Producer** | FastAPI（`api/analysis.py`） | タスクを登録する側 |
+| **Broker** | Redis DB0 | タスクのキュー（受け渡し場所） |
+| **Worker** | `celery_worker` コンテナ | タスクを実際に実行するプロセス |
+| **Backend** | Redis DB1 | タスクの実行結果を保存する場所 |
+
+Broker と Backend を別々の Redis DB（DB0・DB1）に分けているのは、キューと結果が混在してデバッグしにくくなるのを防ぐため。
+
+#### 処理の流れ
+
+```
+1. ユーザーがファイルをアップロード
+2. FastAPI: ファイルを共有ボリュームに書き込む
+3. FastAPI: analyze_audio_task.delay(...) でタスクを Broker に登録
+4. FastAPI: task_id を即座にクライアントへ返す（処理完了を待たない）
+5. Worker: Broker からタスクを取り出して実行（Demucs分離・分析・DB保存）
+6. Worker: 結果（analysis_id）を Backend に保存
+7. クライアント: GET /status/{task_id} でポーリング → SUCCESS なら analysis_id を取得
+```
+
+#### `.delay()` と `AsyncResult`
+
+```python
+# Producer 側：タスクを登録してすぐ返る
+task = analyze_audio_task.delay(tmp_path, song_title, artist_name, user_id)
+task.id  # → "abc-123-..." のような UUID 文字列
+
+# 後でステータスを確認する
+from celery.result import AsyncResult
+result = AsyncResult(task_id)
+result.status   # → "PENDING" / "SUCCESS" / "FAILURE"
+result.result   # → SUCCESS の場合は analysis_id（int）
+```
+
+#### `include=["tasks"]` が必要な理由
+
+`celery_app.py` に `include=["tasks"]` を書かないと、Worker 起動時に `tasks.py` のタスクが登録されない。登録されていないタスクは Worker が受け取っても実行できないため、`[tasks]` が空のログが出て処理が詰まる。
+
+#### JSON シリアライザーを選んだ理由
+
+Celery のデフォルトは pickle だが、本プロジェクトでは JSON を明示的に指定している。
+
+理由：**pickle はデシリアライズ時に任意のコードを実行できるため**、Broker（Redis）が攻撃者に乗っ取られた場合に Worker 側でコードが実行されてしまうリスクがある。JSON は数値・文字列・配列・オブジェクトしか表現できないため、そのようなリスクがない。
+
+```python
+celery_app.conf.update(
+    task_serializer="json",
+    result_serializer="json",
+    accept_content=["json"],
+)
+```
+
+#### `broker_connection_retry_on_startup=True`
+
+Celery 6.0 でのデフォルト動作変更に備えた明示的な設定。これを書かないと起動時に `CPendingDeprecationWarning` が出る。
+
+---
+
+### Docker 共有ボリューム
+
+FastAPI コンテナで受け取った音声ファイルを Celery Worker コンテナで読み込むために **名前付きボリューム** `vocal_uploads` を使う。
+
+```yaml
+# docker-compose.yml
+services:
+  backend:
+    volumes:
+      - vocal_uploads:/tmp/vocal_analyzer   # FastAPI がここに書き込む
+
+  celery_worker:
+    volumes:
+      - vocal_uploads:/tmp/vocal_analyzer   # Worker がここから読み込む
+
+volumes:
+  vocal_uploads:   # 名前付きボリュームとして宣言
+```
+
+ファイルパスを `task_id` ベースの UUID プレフィックス付きで保存することで、同時アップロード時のファイル名衝突を防いでいる。
+
+---
+
+### os.unlink() とは
+
+**Q: `unlink` でセッション用のリンクを消す形？**
+
+`os.unlink(tmp_path)` は「ファイルを削除する」OS の関数。Unix では「ハードリンクを1つ削除する」という内部動作のため `unlink` という名前になっているが、通常のファイルに対して使うと「ファイルを消す」と同じ意味。セッション（ログインセッション）とは無関係。
+
+`tasks.py` の `finally` ブロックで呼び出すことで、分析が成功しても失敗しても一時ファイルが確実に削除される。著作権保護の方針（音声ファイルを保存しない）に沿った実装。
+
+---
+
+### Demucs v4 の本番実装
+
+#### 4トラック構成
+
+Demucs（htdemucs モデル）は音源を **4トラック** に分離する：
+
+| トラック | 内容 |
+|---|---|
+| `vocals` | ボーカル |
+| `drums` | ドラム |
+| `bass` | ベース |
+| `other` | その他（ギター・ピアノ等） |
+
+**Q: 4トラックで過不足ないのか？**
+
+Demucs のモデル設計で "4-stem" が標準。ボーカル以外の3トラックは今回は使わないが、将来的にリズム評価の高度化（ドラムトラックとのビート比較など）で活用できる可能性がある。
+
+#### `sr`（サンプリングレート）とは
+
+`torchaudio.load(audio_path)` の返り値のうち2つ目が `sr`（= sample rate）。「1秒間に何個の音のサンプルが入っているか」を表す数値。Demucs モデルは固定の `samplerate`（通常44100Hz）を前提とするため、元の音声と異なる場合はリサンプリングする。
+
+#### ステレオ前提の理由
+
+Demucs は2チャンネル（ステレオ）入力を前提として学習されているため、モノラル（1チャンネル）の場合はチャンネルを複製してステレオに変換する。出力も常にステレオ `(2, time)` の numpy 配列になる。
+
+これにより `_calculate_rhythm_score` で `mono = vocals.mean(axis=0)` の変換が常に有効となり、分岐（`if vocals.ndim == 2 else vocals`）は不要になった。
+
+---
+
+### モック（Mock）とは
+
+**Q: モックってなに？**
+
+テストで「本物の代わりに使う偽物のオブジェクト」。
+
+音声分析のテストでは、実際に Demucs や Celery を動かすと時間がかかりすぎる・Redisが必要になるなど、テスト環境では実行できない。そこで「テスト中だけ本物の関数を差し替えて、偽物の返り値を返す」のがモック。
+
+```python
+from unittest.mock import patch, MagicMock
+
+# patch: 指定したモジュールの関数を一時的に差し替える
+with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task):
+    res = _upload(client)
+# with ブロックを抜けると元の関数に戻る
+
+# MagicMock: 何でも受け付けて何でも返せる偽物オブジェクト
+mock_task = MagicMock()
+mock_task.id = "test-task-id"   # 好きな属性を自由に設定できる
+```
+
+#### Phase 8 でのテスト変更点
+
+Phase 7 までは `audio_analyzer.analyze` をモックしていたが、Phase 8 では `api/analysis.py` から `audio_analyzer` がなくなり `analyze_audio_task.delay` に変わった。そのためテストのモック対象を変更した。
+
+また、`GET /analysis/{id}` のテストではタスクを実行せずに DB にレコードを直接作成する `_create_analysis_record()` ヘルパーを追加した（Worker が動かないテスト環境でも確認できるようにするため）。
+
+#### テストの最終状態
+
+- **37テスト全 pass**（Phase 7: 34テスト → Phase 8: +3テスト）
+- 追加された3テスト: `test_get_analysis_status_unauthenticated` / `test_get_analysis_status_success` / `test_get_analysis_status_pending`
+
+---
+
+### Q&A まとめ
+
+**Q: `celery_app` と `celery_app.conf.update` の内容の違いは？**
+
+`Celery(...)` コンストラクタには「アプリのアイデンティティ」を渡す：名前・Broker URL・Backend URL・タスクモジュールの場所（`include`）。`conf.update(...)` は「アプリの動作設定」：シリアライザー・タイムゾーン・リトライ挙動など。2段階に分けているのは可読性のため。
+
+**Q: なぜJSONなの？**
+
+pickle は任意コード実行リスクがある。JSON は型が限定されていて安全。ブローカー（Redis）が侵害されたときのリスクを減らす。
+
+**Q: `unlink` でセッション用のリンクを消す形？**
+
+Unix の「ハードリンクを削除する」という名前由来だが、通常ファイルに対して使うと「ファイルを削除する」と同じ意味。セッションとは無関係。
+
+**Q: 分離処理って4トラックなのはなぜ？過不足ない？**
+
+Demucs の htdemucs モデルが "4-stem" 設計で vocals / drums / bass / other を出力する。現状はボーカルのみ使用。ドラムトラックは将来のリズム評価強化で活用できる可能性がある。
+
+**Q: `sr` が何なのか知りたい**
+
+サンプリングレート（1秒あたりのサンプル数）。Demucs の固定サンプルレートと異なる場合にリサンプリングが必要なため取得している。
+
+**Q: 多次元対応できるなら次元をいじるコードは必要なの？**
+
+Demucs の出力は常にステレオ `(2, time)` のため、`if vocals.ndim == 2 else vocals` の else 分岐は実行されない死んだコードになった。リーダブルコードの原則に従い削除した（`mono = vocals.mean(axis=0)` のみに）。
+
+**Q: `else` のコードを残す理由を知りたい**
+
+残す理由がないため削除した。死んだコードはロジックを追う時の邪魔になる。
