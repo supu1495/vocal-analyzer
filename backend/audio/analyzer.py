@@ -101,8 +101,8 @@ class AudioAnalyzer:
         発声タイミング（onset）とビートのズレの一貫性を測定する。
         一貫したズレ（グルーヴ）を高評価し、バラバラなズレを低評価する。
         """
-        # ステレオの場合はモノラルに変換（beat_track・onset_detectはモノラルのみ対応）
-        mono = vocals.mean(axis=0) if vocals.ndim == 2 else vocals
+        # ステレオをモノラルに変換（beat_track・onset_detectはモノラルのみ対応）
+        mono = vocals.mean(axis=0)
 
         # ビート位置を検出してフレーム番号→秒に変換
         _, beat_frames = librosa.beat.beat_track(y=mono, sr=sample_rate)

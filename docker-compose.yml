@@ -17,6 +17,22 @@ services:
       - "8080:8000"
     volumes:
       - ./backend:/app
+      - vocal_uploads:/tmp/vocal_analyzer
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/vocal_analyzer
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=${SECRET_KEY}
+    depends_on:
+      - db
+      - redis
+
+  celery_worker:
+    build:
+      context: ./backend
+    command: celery -A celery_app worker --loglevel=info
+    volumes:
+      - ./backend:/app
+      - vocal_uploads:/tmp/vocal_analyzer
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/vocal_analyzer
       - REDIS_URL=redis://redis:6379
@@ -53,3 +69,4 @@ services:
 
 volumes:
   postgres_data:
+  vocal_uploads:

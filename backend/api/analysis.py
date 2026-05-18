@@ -4,19 +4,20 @@
 """
 
 import os
-import tempfile
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
+from celery.result import AsyncResult
 
-from audio.analyzer import AudioAnalyzer
+from tasks import analyze_audio_task
 from auth_utils import get_current_user
 from database import get_db
 from models import AnalysisResult, User
 
 router = APIRouter(prefix="/api/v1/analysis", tags=["analysis"])
 
-# アプリ起動時に1回だけインスタンス化（Demucsモデルのロードが重いため）
-audio_analyzer = AudioAnalyzer()
+# 共有ボリュームの一時ファイル置き場
+_UPLOAD_DIR = "/tmp/vocal_analyzer"
 
 
 @router.post("/upload")
@@ -24,30 +25,51 @@ async def upload_audio(
     audio_file: UploadFile = File(...),
     song_title: str = "",
     artist_name: str = "",
-    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    音声ファイルをアップロードして分析し、結果をDBに保存する
+    音声ファイルをアップロードして分析タスクをキューに登録する
 
     - audio_file: 音声ファイル（WAV/MP3/M4A）
     - song_title: 楽曲名（任意）
     - artist_name: アーティスト名（任意）
+    - 戻り値: task_id（ステータス確認に使用）
     """
     _validate_audio_file(audio_file)
 
     content = await audio_file.read()
     _validate_file_size(content)
 
-    analysis_data = _run_analysis(audio_file.filename, content, song_title, artist_name)
+    tmp_path = _save_to_shared_volume(audio_file.filename, content)
 
-    saved = _save_to_db(db, song_title, artist_name, analysis_data, current_user.id)
+    task = analyze_audio_task.delay(tmp_path, song_title, artist_name, current_user.id)
 
     return {
-        "analysis_id": saved.id,
-        "status": "completed",
-        "result": analysis_data,
+        "task_id": task.id,
+        "status": "processing",
     }
+
+
+@router.get("/status/{task_id}")
+def get_analysis_status(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    タスクの進捗を確認する
+
+    - task_id: アップロード時に返された task_id
+    - 戻り値: status（PENDING / SUCCESS / FAILURE）と analysis_id（完了時のみ）
+    """
+    result = AsyncResult(task_id)
+
+    if result.status == "SUCCESS":
+        return {"status": "SUCCESS", "analysis_id": result.result}
+
+    if result.status == "FAILURE":
+        return {"status": "FAILURE", "detail": "分析中にエラーが発生しました。"}
+
+    return {"status": result.status}
 
 
 @router.get("/user/statistics")
@@ -96,7 +118,7 @@ def get_analysis(
     """
     指定IDの分析結果を取得する
 
-    - analysis_id: アップロード時に返されたID
+    - analysis_id: ステータス確認で返された analysis_id
     - ログインユーザー自身の分析結果のみ取得可能
     """
     result = db.query(AnalysisResult).filter(AnalysisResult.id == analysis_id).first()
@@ -114,6 +136,12 @@ def get_analysis(
             "rhythm_score": result.rhythm_score,
             "techniques": result.techniques,
             "vocal_range": result.vocal_range,
+            "score_matrix": {
+                "total_score": result.total_score,
+                "faithfulness_score": result.faithfulness_score,
+                "technique_score": result.technique_score,
+                "naturalness_penalty": result.naturalness_penalty,
+            },
             "feedback": result.feedback,
         },
     }
@@ -142,50 +170,18 @@ def _validate_file_size(content: bytes) -> None:
         )
 
 
-def _run_analysis(
-    filename: str, content: bytes, song_title: str, artist_name: str
-) -> dict:
+def _save_to_shared_volume(filename: str, content: bytes) -> str:
     """
-    一時ファイルに書き出して音声分析を実行する
-    分析後は著作権保護のため一時ファイルを即時削除する
+    共有ボリュームに一時ファイルを保存してパスを返す
+
+    ファイル名の衝突を防ぐため UUID をプレフィックスに付ける
     """
+    os.makedirs(_UPLOAD_DIR, exist_ok=True)
     suffix = os.path.splitext(filename)[1]
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
-
-    try:
-        result = audio_analyzer.analyze(tmp_path)
-        result["song_title"] = song_title
-        result["artist_name"] = artist_name
-        return result
-    finally:
-        os.unlink(tmp_path)
-
-
-def _save_to_db(
-    db: Session, song_title: str, artist_name: str, analysis_data: dict, user_id: int
-) -> AnalysisResult:
-    """分析結果をPostgreSQLに保存してcommitする"""
-    score_matrix = analysis_data.get("score_matrix", {})
-    record = AnalysisResult(
-        user_id=user_id,
-        song_title=song_title,
-        artist_name=artist_name,
-        pitch_accuracy=analysis_data.get("pitch_accuracy"),
-        rhythm_score=analysis_data.get("rhythm_score"),
-        techniques=analysis_data.get("techniques"),
-        vocal_range=analysis_data.get("vocal_range"),
-        total_score=score_matrix.get("total_score"),
-        faithfulness_score=score_matrix.get("faithfulness_score"),
-        technique_score=score_matrix.get("technique_score"),
-        naturalness_penalty=score_matrix.get("naturalness_penalty"),
-        feedback=analysis_data.get("feedback"),
-    )
-    db.add(record)
-    db.commit()
-    db.refresh(record)
-    return record
+    tmp_path = os.path.join(_UPLOAD_DIR, f"{uuid.uuid4()}{suffix}")
+    with open(tmp_path, "wb") as f:
+        f.write(content)
+    return tmp_path
 
 
 def _calculate_growth_rate(pitch_values: list[float]) -> int:
