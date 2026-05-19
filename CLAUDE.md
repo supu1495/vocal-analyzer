@@ -136,16 +136,51 @@ crepeを `--no-deps` でインストールしてhmmlearnのpybind11競合を回�
 
 ## 次にやるべきこと
 
-### Phase 9以降
+### Phase 9: 本番環境デプロイ（進行中）
+
+**確定した構成:**
+
+```
+CF Pages（フロントエンド配信）
+    ↓
+CF Tunnel（自宅PCへの橋渡し）
+    ↓
+自宅PC
+  └─ Docker Compose
+       ├─ Nginx
+       ├─ FastAPI
+       ├─ Celery Worker（Demucs）
+       ├─ PostgreSQL
+       └─ Redis
+```
+
+**CF Workers / R2 / D1 を今回使わない理由:**
+- CF Workers: JavaScript/TypeScript向けのためFastAPIがそのまま動かない
+- CF D1: PostgreSQL（SQLAlchemy）からSQLite（D1）への全面書き直しが必要
+- CF R2: 今のコードはローカルディスク前提のため改修が必要
+
+**デプロイロードマップ:**
+
+| Step | 内容 |
+|---|---|
+| Step 1 | Cloudflare アカウント作成 + ドメイン取得 |
+| Step 2 | 本番用の設定変更（SECRET_KEY 強化・CORS・.env 整備） |
+| Step 3 | Docker Compose で本番起動（自宅PC） |
+| Step 4 | Cloudflare Tunnel のセットアップ（自宅PC ↔ Cloudflare 接続） |
+| Step 5 | CF Pages にフロントエンドをデプロイ（GitHub 連携） |
+| Step 6 | 動作確認（スマホのモバイル回線から本番URLにアクセス） |
+
+### Phase 10以降
 
 | フェーズ | 内容 |
 |---|---|
-| Phase 9 | 本番環境デプロイ |
 | Phase 10 | 精度確認（実際のカラオケ録音を使った検出精度の検証） |
 | Phase 11 | 時系列成長分析（録音日時の手動入力・スコア推移・練習継続率の可視化） |
 
 ### 技術的負債・将来対応
 
+- **将来のCloudflare完全移行**: 現在は自宅PC + CF Tunnel 構成で動かす。外部公開・スケールアップのタイミングで CF Workers（API）/ CF R2（ファイル一時保存）/ CF D1（DB）への移行を検討する。ただしFastAPIの書き直しとPostgreSQL→SQLite移行が伴うため大規模な作業になる
+- **Cloudflare Tunnel のエグレスについて**: 分析結果（JSON）の返却はエグレスに該当するが、データ量がKB単位のテキストのため実質問題なし。CF Tunnelの無料プランには明示的な帯域制限の記載がなく、禁止されているのは「動画・音声ファイルの大量配信」であり今回の用途とは異なる
 - **本番環境の接続情報管理**: `.env.example` の `DATABASE_URL` / `REDIS_URL` は開発用のデフォルト値がそのまま書かれている。本番デプロイ時には環境変数またはAWS Secrets Managerなどのシークレット管理ツールで注入すること（`POSTGRES_PASSWORD` のハードコードも同様）
 - **PC版UI実装**: 現状はスマートフォン向けレイアウト。PC向けレスポンシブ対応またはPC専用レイアウトを追加する
 - **複数ファイル一括アップロード・日付指定機能**: 複数の音声ファイルを一度に投下する機能、および録音日時を手動で指定して登録する機能（後日まとめてアップロードしても正しい日時で記録できるようにする。Phase 11 の時系列成長分析と合わせて実装予定）
