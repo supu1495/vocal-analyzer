@@ -263,7 +263,27 @@ function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
       const url = `${API_BASE}/api/v1/analysis/upload?song_title=${encodeURIComponent(songTitle)}&artist_name=${encodeURIComponent(artistName)}`
       const res = await fetch(url, { method: 'POST', credentials: 'include', body: form })
       if (!res.ok) throw new Error(`サーバーエラー: ${res.status}`)
-      const data: AnalysisResult = await res.json()
+      const { task_id } = await res.json()
+
+      let analysisId: number | null = null
+      for (let i = 0; i < 60; i++) {
+        await new Promise(resolve => setTimeout(resolve, 5000))
+        const statusRes = await fetch(`${API_BASE}/api/v1/analysis/status/${task_id}`, { credentials: 'include' })
+        if (!statusRes.ok) throw new Error(`ステータス確認エラー: ${statusRes.status}`)
+        const statusData = await statusRes.json()
+        if (statusData.status === 'SUCCESS') {
+          analysisId = statusData.analysis_id
+          break
+        } else if (statusData.status === 'FAILURE') {
+          throw new Error('分析中にエラーが発生しました')
+        }
+      }
+
+      if (analysisId === null) throw new Error('分析がタイムアウトしました')
+
+      const resultRes = await fetch(`${API_BASE}/api/v1/analysis/${analysisId}`, { credentials: 'include' })
+      if (!resultRes.ok) throw new Error(`結果取得エラー: ${resultRes.status}`)
+      const data: AnalysisResult = await resultRes.json()
       onResult({ ...data, song_title: songTitle, artist_name: artistName })
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : '分析に失敗しました')

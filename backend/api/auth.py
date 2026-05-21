@@ -80,7 +80,7 @@ def register(body: RegisterRequest, response: Response, db: Session = Depends(ge
         value=token,
         httponly=True,
         secure=True,
-        samesite="lax",
+        samesite="none",
         max_age=60 * 60 * 24,
     )
     return AuthResponse(user_id=user.id, email=user.email)
@@ -112,7 +112,7 @@ def login(body: LoginRequest, response: Response, db: Session = Depends(get_db))
         value=token,
         httponly=True,
         secure=True,
-        samesite="lax",
+        samesite="none",
         max_age=60 * 60 * 24,
     )
     return AuthResponse(user_id=user.id, email=user.email)
