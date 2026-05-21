@@ -1,0 +1,5 @@
+name = "vocal-analyzer"
+compatibility_date = "2025-05-21"
+
+[assets]
+directory = "./frontend/dist"
