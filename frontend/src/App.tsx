@@ -1,5 +1,7 @@
 import { useState, useEffect, type CSSProperties } from 'react'
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
+
 // --- 型定義 ---
 type Screen = 'login' | 'register' | 'upload' | 'result' | 'dashboard'
 
@@ -147,7 +149,7 @@ function AuthScreen({
     }
     setLoading(true)
     try {
-      const endpoint = isLogin ? '/api/v1/auth/login' : '/api/v1/auth/register'
+      const endpoint = isLogin ? `${API_BASE}/api/v1/auth/login` : `${API_BASE}/api/v1/auth/register`
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -258,7 +260,7 @@ function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
     try {
       const form = new FormData()
       form.append('audio_file', file)
-      const url = `/api/v1/analysis/upload?song_title=${encodeURIComponent(songTitle)}&artist_name=${encodeURIComponent(artistName)}`
+      const url = `${API_BASE}/api/v1/analysis/upload?song_title=${encodeURIComponent(songTitle)}&artist_name=${encodeURIComponent(artistName)}`
       const res = await fetch(url, { method: 'POST', credentials: 'include', body: form })
       if (!res.ok) throw new Error(`サーバーエラー: ${res.status}`)
       const data: AnalysisResult = await res.json()
@@ -410,7 +412,7 @@ function DashboardScreen({ latestResult, onBack }: {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    fetch('/api/v1/analysis/user/statistics', { credentials: 'include' })
+    fetch(`${API_BASE}/api/v1/analysis/user/statistics`, { credentials: 'include' })
       .then(res => { if (!res.ok) throw new Error(`サーバーエラー: ${res.status}`); return res.json() })
       .then((data: Statistics) => setStats(data))
       .catch(e => setError(e instanceof Error ? e.message : '統計の取得に失敗しました'))
@@ -499,7 +501,7 @@ export default function App() {
 
   // 起動時にCookieの有効性を確認してログイン状態を復元する
   useEffect(() => {
-    fetch('/api/v1/auth/me', { credentials: 'include' })
+    fetch(`${API_BASE}/api/v1/auth/me`, { credentials: 'include' })
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data) {
@@ -516,7 +518,7 @@ export default function App() {
   }
 
   const handleLogout = () => {
-    fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' })
+    fetch(`${API_BASE}/api/v1/auth/logout`, { method: 'POST', credentials: 'include' })
       .finally(() => {
         setAuth(null)
         setAnalysisResult(null)
