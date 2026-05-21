@@ -242,6 +242,16 @@ function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
   const [artistName, setArtistName] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [pollCount, setPollCount] = useState(0)
+
+  useEffect(() => {
+    if (!loading) return
+    const style = document.createElement('style')
+    style.id = 'va-spin'
+    style.textContent = '@keyframes va-spin { to { transform: rotate(360deg); } }'
+    document.head.appendChild(style)
+    return () => { document.getElementById('va-spin')?.remove() }
+  }, [loading])
 
   const handleFile = (f: File) => {
     const allowed = ['audio/wav', 'audio/mpeg', 'audio/mp4', 'audio/x-m4a']
@@ -256,7 +266,7 @@ function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
 
   const handleSubmit = async () => {
     if (!file) return
-    setLoading(true); setError('')
+    setLoading(true); setError(''); setPollCount(0)
     try {
       const form = new FormData()
       form.append('audio_file', file)
@@ -268,6 +278,7 @@ function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
       let analysisId: number | null = null
       for (let i = 0; i < 60; i++) {
         await new Promise(resolve => setTimeout(resolve, 5000))
+        setPollCount(i + 1)
         const statusRes = await fetch(`${API_BASE}/api/v1/analysis/status/${task_id}`, { credentials: 'include' })
         if (!statusRes.ok) throw new Error(`ステータス確認エラー: ${statusRes.status}`)
         const statusData = await statusRes.json()
@@ -290,6 +301,53 @@ function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
     } finally {
       setLoading(false)
     }
+  }
+
+  if (loading) {
+    const dots = '.'.repeat((pollCount % 3) + 1)
+    return (
+      <div style={{ maxWidth: '560px', margin: '0 auto', padding: '80px 20px', textAlign: 'center' }}>
+        <p style={{ color: '#c084fc', fontSize: '12px', letterSpacing: '0.2em', marginBottom: '48px' }}>VOCAL ANALYZER</p>
+
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '40px' }}>
+          <svg width="72" height="72" viewBox="0 0 72 72" style={{ animation: 'va-spin 1.2s linear infinite' }}>
+            <defs>
+              <linearGradient id="spinGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stopColor="#c084fc" />
+                <stop offset="100%" stopColor="#818cf8" />
+              </linearGradient>
+            </defs>
+            <circle cx="36" cy="36" r="28" fill="none" stroke="#1e1e2e" strokeWidth="6" />
+            <circle
+              cx="36" cy="36" r="28" fill="none"
+              stroke="url(#spinGrad)" strokeWidth="6" strokeLinecap="round"
+              strokeDasharray={`${2 * Math.PI * 28 * 0.75} ${2 * Math.PI * 28 * 0.25}`}
+            />
+          </svg>
+        </div>
+
+        <h2 style={{ color: 'white', fontSize: '26px', fontWeight: '800', marginBottom: '12px' }}>
+          分析中{dots}
+        </h2>
+        <p style={{ color: '#555', fontSize: '13px', marginBottom: '32px' }}>
+          AIが歌声を解析しています（最大5分かかる場合があります）
+        </p>
+
+        {(songTitle || artistName) && (
+          <div style={{
+            display: 'inline-block', background: 'rgba(255,255,255,0.02)',
+            border: '1px solid #1e1e2e', borderRadius: '12px', padding: '14px 24px', marginBottom: '32px',
+          }}>
+            {songTitle && <p style={{ color: '#aaa', fontSize: '14px', marginBottom: artistName ? '2px' : 0 }}>{songTitle}</p>}
+            {artistName && <p style={{ color: '#555', fontSize: '12px' }}>{artistName}</p>}
+          </div>
+        )}
+
+        {pollCount > 0 && (
+          <p style={{ color: '#333', fontSize: '12px' }}>{pollCount * 5}秒経過 / 最大300秒</p>
+        )}
+      </div>
+    )
   }
 
   return (
