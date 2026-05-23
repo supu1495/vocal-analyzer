@@ -30,22 +30,24 @@ vocal-analyzerの製品要件・設計上の決定事項・将来方針をまと
 
 ## 機能要件
 
-### 実装済み（Phase 1〜6）
+### 実装済み（Phase 1〜9）
 
 | 機能 | 詳細 |
 |---|---|
 | ユーザー認証 | メール・パスワード登録・ログイン。JWT（httpOnly Cookie）方式 |
-| ロックアウト | 5回連続ログイン失敗で15分ロック（Redis） |
-| 音声アップロード | WAV / MP3 / M4A、最大50MB |
+| ロックアウト（サーバー） | 5回連続ログイン失敗で15分ロック（Redis） |
+| ロックアウト（UI） | 429 受信時にログインボタンを 15分無効化（Phase 9） |
+| 音声アップロード | WAV / MP3 / M4A、最大50MB（チャンクストリーミングで早期拒否） |
 | ピッチ分析 | Crepeによるフレームごとのピッチ検出・安定性スコア（0〜100） |
-| 分析結果保存 | PostgreSQLに保存。音声ファイルは即時削除 |
+| 分析結果保存 | PostgreSQLに保存。音声ファイルは即時削除。`user_id` NOT NULL（Phase 9でマイグレーション実施） |
 | 統計ダッシュボード | 過去の分析結果の推移グラフ |
 | バックエンドテスト | pytest による認証・認可・分析APIのテスト（37テスト） |
 | 歌唱技法検出 | ビブラート・こぶし・フォール・しゃくり・ロングトーン（Phase 7） |
 | スコアマトリクス | faithfulness / technique / naturalness_penalty / total_score（Phase 7） |
 | ルールベースフィードバック | 歌唱特性・改善点・伸ばすべきポイントの3セクション（Phase 7） |
 | 非同期処理 | Celery + Redis によるタスクキュー。upload は task_id を即返却（Phase 8） |
-| 音源分離 | Demucs v4（htdemucs）による4トラック分離（Phase 8） |
+| 音源分離 | Demucs v4（モデル: `htdemucs`）による4トラック分離（Phase 8） |
+| 本番デプロイ | CF Pages（フロント）+ CF Tunnel（自宅PCへの橋渡し）+ Docker Compose（自宅PC）。クロスドメイン Cookie（SameSite=none）/ CORS 環境変数化 / `VITE_API_BASE_URL` の本番ビルド埋め込み（Phase 9） |
 
 ### 実装予定
 
@@ -57,9 +59,11 @@ vocal-analyzerの製品要件・設計上の決定事項・将来方針をまと
 | Phase 7 | スコアマトリクス実装 | ✅ 実装済み（faithfulness / technique / naturalness_penalty / total_score） |
 | Phase 7 | ルールベースフィードバック生成 | ✅ 実装済み（歌唱特性・改善点・伸ばすべきポイントの3セクション） |
 | Phase 8 | 非同期処理（Celery） | ✅ 実装済み（Broker: Redis DB0 / Backend: Redis DB1 / analyze_audio_task） |
-| Phase 8 | Demucs音源分離 | ✅ 実装済み（htdemucs モデルで4トラック分離・Celery Worker で非同期実行） |
-| Phase 9 | 本番環境デプロイ | |
+| Phase 8 | Demucs音源分離 | ✅ 実装済み（`htdemucs` モデルで4トラック分離・Celery Worker で非同期実行） |
+| Phase 9 | 本番環境デプロイ | ✅ 実装済み（CF Pages + CF Tunnel + 自宅PC Docker Compose） |
 | Phase 10 | 精度確認 | 実際のカラオケ録音を使った検出精度の検証。現状テストはモックベースで実音声未テスト |
+| Phase 10 | GPU 化 | WSL2 + NVIDIA Container Toolkit + CUDA版PyTorch。RTX 4060 Ti 8GB を活用。`htdemucs_ft` への切り替えも検討 |
+| Phase 10 | CF D1 への移行 | PostgreSQL（SQLAlchemy + Alembic）から CF D1（SQLite）への部分移行。アプリケーションコードの書き直しが必要 |
 | Phase 11 | 時系列成長分析 | 録音日時の手動入力（`recorded_at` カラム追加）・スコア推移・セッション間隔・練習継続率の可視化 |
 
 ### 将来検討（優先度低・時期未定）
@@ -145,9 +149,11 @@ vocal-analyzerの製品要件・設計上の決定事項・将来方針をまと
 - パスワードはbcryptでハッシュ化
 - ログイン失敗のロックアウトはRedisで管理
 - エラーメッセージはユーザー列挙攻撃を防ぐため曖昧化（「メールアドレスまたはパスワードが正しくありません」）
-- 本番環境ではHTTPS必須
-- 本番環境ではDBパスワード（`POSTGRES_PASSWORD`）をハードコードせず、AWS Secrets Managerなどのシークレット管理ツールまたは環境変数で注入すること（現在の `docker-compose.yml` は開発専用のハードコード値 `postgres` を使用）
-- 本番環境では `.env.example` の `DATABASE_URL` / `REDIS_URL` を実際の接続先に差し替えること（現在は開発用のデフォルト値がそのまま書かれているため、本番デプロイ時には環境変数またはシークレット管理ツールで注入する）
+- 本番環境ではHTTPS必須（CF Pages + CF Tunnel が自動で TLS 終端する）
+- DBパスワード（`POSTGRES_PASSWORD`）は `docker-compose.yml` 内で環境変数化済み（Phase 9）。本格的な本番運用時には AWS Secrets Manager 等のシークレット管理ツールで注入する
+- `DATABASE_URL` は `docker-compose.yml` 内で `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` から組み立てるため、`.env` には個別のパスワード等を記載しないとつながらない
+- CORS 許可オリジンは `CORS_ALLOWED_ORIGINS` 環境変数で制御（Phase 9）。本番では `https://vocal-analyzer.supu361.dev` を許可
+- アップロードファイルのサイズ検証はチャンクストリーミングで早期拒否（Phase 9）。50MB 超は読み込みを中止して部分ファイルも削除
 
 ### パフォーマンス
 
@@ -158,15 +164,11 @@ vocal-analyzerの製品要件・設計上の決定事項・将来方針をまと
 
 ## 設計上の決定事項
 
-### analysis_results.user_id を Nullable のまま維持する理由
+### analysis_results.user_id を NOT NULL 化（Phase 9）
 
-現状は`NOT NULL`化せずNullableを維持する。
-将来的に「ログインなしで分析できる機能」（ゲスト分析・友人の分析代行など）を実装する予定があるため、NOT NULL化はそのタイミングまで保留。
-
-### Demucsのスタブ化
-
-CPUでの処理が遅すぎるため、Celery非同期処理の実装後に本番復帰させる。
-現在は`audio/separator.py`がlibrosaで音声をそのままボーカルとして返すスタブ実装。
+Phase 9 で `analysis_results.user_id` を NOT NULL に変更した（マイグレーション `6b8b9af3d05e`）。
+Phase 5 で全エンドポイントの認証必須化が完了しており、user_id が必ず入る前提のためデータ整合性を強化。
+ゲスト分析（非ログインでの分析）は将来検討機能として残るが、その場合は別カラムまたは別テーブルで対応する。
 
 ### CrepeをTensorFlowで動かす
 
@@ -198,12 +200,18 @@ httpOnly CookieによりXSSでのトークン窃取リスクは軽減済み。
 | カラム | 型 | 備考 |
 |---|---|---|
 | id | INTEGER PK | |
-| user_id | INTEGER nullable | ゲスト分析機能実装まではNullable維持 |
+| user_id | INTEGER NOT NULL | Phase 9 でマイグレーション実施（`users.id` への外部キー） |
+| song_title | VARCHAR(255) NOT NULL DEFAULT '' | |
+| artist_name | VARCHAR(255) NOT NULL DEFAULT '' | |
 | pitch_accuracy | FLOAT nullable | 0〜100 |
-| rhythm_score | FLOAT nullable | 0〜100（現在スタブ） |
+| rhythm_score | FLOAT nullable | 0〜100 |
 | techniques | JSON nullable | 技法検出結果 |
-| vocal_range | JSON nullable | 最低音・最高音（現在スタブ） |
-| feedback | TEXT nullable | AIフィードバック（現在スタブ） |
+| vocal_range | JSON nullable | 最低音・最高音・半音数（フロント未表示。Phase 10以降で対応） |
+| total_score | FLOAT nullable | スコアマトリクスの総合点（フロント未表示。Phase 10以降で対応） |
+| faithfulness_score | FLOAT nullable | 基本忠実度（フロント未表示） |
+| technique_score | FLOAT nullable | 技法スコア（フロント未表示） |
+| naturalness_penalty | FLOAT nullable | 不自然さペナルティ（フロント未表示） |
+| feedback | TEXT nullable | AIフィードバック（ルールベース） |
 | created_at | TIMESTAMP | |
 
 ---

@@ -3726,3 +3726,342 @@ Vercelはフロントエンド（Next.js等）に特化したプラットフォ�
 **Q: エグレスの「引っかかる基準」の数値は？**
 
 Cloudflare Tunnelの無料プランに明示的な数値の記載はなく、「何GB以上で制限する」という明確な基準は不明。Cloudflareのコミュニティフォーラムや公式サポートに問い合わせるのが確実。
+
+---
+
+## 2026-05-24
+
+### CORS（オリジン間リソース共有）
+
+**Q: CORS って何？**
+
+ブラウザのセキュリティ機構で「異なるオリジンへの fetch を制限する」ルール。サーバー側が「許可するよ」と明示的にヘッダで返さないとブラウザがレスポンスを JS に渡さずブロックする。
+
+**オリジン**＝「スキーム + ドメイン + ポート」の組み合わせ。
+
+| 場所 | オリジン |
+|---|---|
+| フロント | `https://vocal-analyzer.supu361.dev` |
+| API | `https://vocal-api.supu361.dev` |
+
+サブドメインが違うだけでも **別オリジン** と判定される。
+
+#### リクエストの流れ
+
+1. ブラウザがフロントから `fetch("https://vocal-api.supu361.dev/...")` を実行
+2. ブラウザは自動で `Origin: https://vocal-analyzer.supu361.dev` ヘッダを付ける
+3. FastAPI の CORS ミドルウェアが「このオリジンは `allow_origins` に含まれているか？」を確認
+4. **含まれている** → `Access-Control-Allow-Origin: https://vocal-analyzer.supu361.dev` をレスポンスに付ける
+5. **含まれていない** → そのヘッダを付けない → ブラウザがレスポンスを JS に渡さずブロック
+
+ポイント: **サーバーはレスポンスを返している**。ブラウザが受け取った後にブロックしている。
+
+#### `allow_credentials=True` との関係
+
+このアプリは Cookie で JWT を送るので `allow_credentials=True` が必須。
+この設定下では `allow_origins=["*"]` は **使えない**（仕様で禁止）。必ず具体的なオリジンを列挙する必要がある。
+
+#### Phase 9 での修正
+
+`backend/main.py` で `allow_origins` をハードコードしていたものを `CORS_ALLOWED_ORIGINS` 環境変数化（カンマ区切り）。`docker-compose.yml` 経由で `.env` から読む。
+
+---
+
+### VITE_API_BASE_URL と CORS_ALLOWED_ORIGINS の違い
+
+「どこにリクエストを送るか」と「どこからのリクエストを許可するか」は別物。
+
+| | `VITE_API_BASE_URL` | `CORS_ALLOWED_ORIGINS` |
+|---|---|---|
+| 使う場所 | フロントエンド（App.tsx） | バックエンド（main.py） |
+| 役割 | **どこへ** リクエストを送るか | **どこから** のリクエストを許可するか |
+| タイミング | ビルド時に埋め込み | ランタイム（コンテナ起動時）に読む |
+| 値の例 | `https://vocal-api.supu361.dev` | `https://vocal-analyzer.supu361.dev` |
+
+**Vite の挙動：** `import.meta.env.VITE_XXX` は **ビルド時に文字列リテラルとして置換** される。`.env.production` の値が `npm run build` で読み込まれて、ビルド成果物の JS に文字列としてそのまま埋め込まれる。ブラウザに配信されてから値を変えることはできない。
+
+両方欠けても通信は失敗する：
+- `VITE_API_BASE_URL` 未設定 → 相対パスで `https://vocal-analyzer.supu361.dev/api/v1/...` に飛ぶ → CF Pages は API ではないので 404
+- `CORS_ALLOWED_ORIGINS` 未設定 → サーバーが許可ヘッダ返さない → ブラウザがブロック
+
+---
+
+### `--reload` と本番環境
+
+**Q: `--reload` って何？**
+
+uvicorn の起動オプションで「ファイル変更を監視して、変更を検知したら自動的にサーバーを再起動する」機能。ローカル開発では便利（コード書く → 保存 → すぐ反映）。
+
+**Q: なぜ本番では問題なのか？**
+
+1. **余計な CPU 負荷** — ファイル監視のために OS の inotify で常に `.py` ファイルを見続ける。本番では誰もコード書き換えないので無駄
+2. **予期せぬ再起動リスク** — ログファイルや `.pyc` キャッシュの更新で本番サーバーが勝手に再起動 → その瞬間のリクエストが失敗
+3. **性能特性** — `--reload` モードはワーカープロセス管理が異なり、本番想定の最適化が効かない
+
+#### Phase 9 での対応
+
+`backend/Dockerfile` の CMD から `--reload` を削除し、`docker-compose.override.yml` でローカル開発時のみ `--reload` 付きの command を上書きする構成にした。
+
+```yaml
+# docker-compose.override.yml（gitignore対象）
+services:
+  backend:
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+---
+
+### `docker-compose.override.yml`
+
+`docker compose` は `docker-compose.yml` と `docker-compose.override.yml` を自動でマージする。後者はローカル開発時の上書き専用で、`.gitignore` に入れて本番にコピーしない運用が標準。
+
+このプロジェクトでは以下をローカル限定にしている：
+- backend の `--reload` 付き command
+- PostgreSQL の `ports: "5432:5432"`（psql や pgAdmin から接続するため）
+
+---
+
+### `async` / `await`
+
+Python の非同期処理キーワード。
+
+**普通の関数（同期）：**
+```python
+def read_file():
+    content = open("a.txt").read()  # 読み終わるまで他の処理は止まる
+    return content
+```
+
+**非同期関数：**
+```python
+async def read_file():
+    content = await some_async_read()  # 「待つ」が、その間サーバーは他の処理ができる
+    return content
+```
+
+- `async def` で宣言した関数は **コルーチン**（非同期関数）になる
+- `await` の間、CPU は他のリクエストを処理できる（処理がブロックされない）
+
+FastAPI は非同期前提で作られているので、ネットワーク I/O は `async`/`await` を使うのが定石。
+
+---
+
+### `os.path.splitext`
+
+ファイルパスを「拡張子の前」と「拡張子」に分割する標準ライブラリ関数。タプル（2要素のペア）が返る。
+
+```python
+os.path.splitext("recording.mp3")  # → ("recording", ".mp3")
+os.path.splitext("audio.wav")      # → ("audio", ".wav")
+os.path.splitext("noextension")    # → ("noextension", "")
+os.path.splitext("/path/to/song.m4a")  # → ("/path/to/song", ".m4a")
+```
+
+`backend/api/analysis.py` では `[1]` でタプルの2番目（拡張子）を取り出している。librosa は **ファイル名の拡張子を見て読み込み方法を決める** ため、UUID リネーム後も元の拡張子を保持する必要がある。
+
+---
+
+### チャンク単位のファイル処理（DoS対策）
+
+**Q: 「ファイル全体を一旦メモリに展開してからサイズチェック」って何？**
+
+修正前のコード：
+```python
+content = await audio_file.read()   # ① ファイル全体を読み込む
+if len(content) > 50 * 1024 * 1024: # ② 後からサイズを判定
+    raise HTTPException(...)
+```
+
+`audio_file.read()` を引数なしで呼ぶと、ファイル全体を一気に読んで `bytes` オブジェクトとして返す。500MB のファイルを投げられても、まず 500MB の RAM を使ってから「大きすぎる」と却下する。これが DoS の入口になる。
+
+**Q: 「チャンク単位」って何？**
+
+ファイルを小さい単位（1MB ずつなど）で少しずつ読むやり方。
+
+```python
+total = 0
+with open(tmp_path, "wb") as f:
+    while chunk := await audio_file.read(1024 * 1024):  # 1MBずつ
+        total += len(chunk)
+        if total > 50 * 1024 * 1024:
+            raise HTTPException(...)  # 50MB超えたら即拒否
+        f.write(chunk)  # 1MB書いて捨てる
+```
+
+| | 50MB ファイル | 500MB（嫌がらせ） |
+|---|---|---|
+| 修正前 | 50MB RAM 使用 | **500MB RAM 使用** |
+| 修正後 | 1MB RAM 使用 | **1MB RAM 使用**（51MB読んだ時点で拒否） |
+
+ディスクに直接書くやり方だと、正常な大きいファイルでも常に 1MB のメモリしか使わない。さらに無駄がなくなる。
+
+---
+
+### `POSTGRES_PASSWORD` の環境変数化
+
+**Q: docker-compose.yml や .gitignore って git に置いていいの？**
+
+両方ともコミットして OK。
+
+| ファイル | git管理 | 理由 |
+|---|---|---|
+| `.gitignore` | ✅ する | 「git で管理しないファイル」のリストそのもの。チーム全員に共通させる必要がある |
+| `docker-compose.yml` | ✅ する | プロジェクトのインフラ定義。これがないと他人がプロジェクトを起動できない |
+| `.env` | ❌ しない | 秘密情報（SECRET_KEY、パスワードなど）が直接書かれる |
+| `docker-compose.override.yml` | ❌ しない | 各開発者のローカル固有設定 |
+
+#### Phase 9 での対応
+
+それまで `docker-compose.yml` 内に `POSTGRES_PASSWORD: postgres` と直書きされていたものを、環境変数参照 `${POSTGRES_PASSWORD}` に置き換えた。`.env` に実際のランダムパスワードを書く。
+
+```yaml
+# docker-compose.yml
+db:
+  environment:
+    POSTGRES_USER: ${POSTGRES_USER}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    POSTGRES_DB: ${POSTGRES_DB}
+
+backend:
+  environment:
+    - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+```
+
+**注意：** `POSTGRES_PASSWORD` を後から変えても、すでに DB ボリュームが作られている場合はパスワードが更新されない（postgres が初回起動時のみこの環境変数を使うため）。パスワード変更時は `docker volume rm vocal-analyzer_postgres_data` で DB を初期化し直すか、`ALTER USER` で個別に変更する必要がある。
+
+---
+
+### Celery `AsyncResult` と `DisabledBackend` バグ
+
+**症状：** `GET /api/v1/analysis/status/{task_id}` が 500 エラー。バックエンドログに以下：
+```
+AttributeError: 'DisabledBackend' object has no attribute '_get_task_meta_for'
+```
+
+**原因：** `from celery.result import AsyncResult` でインポートして `AsyncResult(task_id)` と呼ぶと、Celery のデフォルトアプリ（結果バックエンド未設定）が使われる。`celery_app.py` で設定した Broker / Backend の URL を知らない状態のため、結果取得が失敗する。
+
+**修正：**
+```python
+from celery_app import celery_app
+
+# AsyncResult(task_id)  ← NG: DisabledBackend を見に行く
+result = celery_app.AsyncResult(task_id)  # OK: 正しい backend を見る
+```
+
+`celery_app.AsyncResult(...)` のように **アプリインスタンスのメソッド経由** で呼ぶと、そのアプリの設定（Redis DB1）が使われる。
+
+---
+
+### M4A と torchaudio・ffmpeg
+
+torchaudio の soundfile バックエンドは libsndfile に依存しており、libsndfile は **M4A（AAC）を非対応**。iPhone 録音は M4A が標準のため、そのまま渡すと `LibsndfileError: Format not recognised` で失敗する。
+
+**Phase 9 での対応：** `backend/audio/separator.py` で ffmpeg を `subprocess.run` で呼んで M4A → WAV に変換してから torchaudio に渡す `_to_wav()` ヘルパーを追加した。WAV の場合はそのまま渡す。
+
+```python
+def _to_wav(audio_path: str) -> tuple[str, bool]:
+    if audio_path.lower().endswith(".wav"):
+        return audio_path, False
+    wav_path = audio_path + ".wav"
+    subprocess.run(["ffmpeg", "-y", "-i", audio_path, wav_path],
+                   check=True, capture_output=True)
+    return wav_path, True
+```
+
+呼び出し側で変換した一時 WAV を `try/finally` で削除する。
+
+---
+
+### PyTorch + Celery prefork のデッドロック
+
+PyTorch をモジュールレベル（`tasks.py` の先頭付近）で `AudioAnalyzer()` 経由でロードすると、Celery が prefork ワーカーを fork する前に PyTorch が初期化されてしまい、子プロセスがデッドロックすることがある（PyTorch の内部スレッドが fork に追随しないため）。
+
+**Phase 9 での対応：** `tasks.py` で `AudioAnalyzer` を **遅延初期化** に変更。
+
+```python
+_audio_analyzer: AudioAnalyzer | None = None
+
+def _get_analyzer() -> AudioAnalyzer:
+    global _audio_analyzer
+    if _audio_analyzer is None:
+        _audio_analyzer = AudioAnalyzer()  # 初回タスク実行時に初期化
+    return _audio_analyzer
+```
+
+これで「fork が完了してから子プロセスが初めて PyTorch をロードする」ようになり、デッドロックが起きない。
+
+---
+
+### scipy.signal.hann と librosa 0.10.1
+
+librosa 0.10.1 の `beat.py` は `scipy.signal.hann(5)` を直接呼んでいるが、**`scipy.signal.hann` は scipy 1.11 で削除された**（`scipy.signal.windows.hann` のショートカットだったため）。
+
+`scipy==1.10.1` に固定することで `librosa.beat.beat_track`（リズム検出）が動くようにしている。
+
+確認方法：
+```bash
+docker compose exec backend grep -r "signal\.hann" /usr/local/lib/python3.11/site-packages/librosa/
+```
+
+---
+
+### Vite proxy のハマりどころ
+
+`localhost:5173` から `/api/v1/auth/login` を呼ぶと、Vite が「5173 番ポートに `/api` があるはず」と解釈する。何も設定しないと Vite は 404 を返す。
+
+**Phase 9 での対応：** `vite.config.ts` に proxy 設定を追加。
+
+```typescript
+server: {
+  proxy: {
+    '/api': {
+      target: 'http://backend:8000',
+      changeOrigin: true,
+    },
+  },
+},
+```
+
+**Q: なぜ `localhost:8080` ではなく `backend:8000` なの？**
+
+Vite は Docker コンテナの中で動いている。その内側から見ると `localhost` は自分自身（frontend コンテナ）を指してしまう。Docker Compose のサービス名 `backend` を使うと、Docker の内部 DNS が backend コンテナの IP に解決してくれる。ポートもコンテナ内部の `8000`（ホストへの公開は `8080:8000`）を指定する。
+
+---
+
+### nano エディタ
+
+`nano` はキーバインドがシンプルなターミナルエディタ。`vim` と違って「すぐに編集できる」モードで開く。
+
+| ショートカット | 意味 |
+|---|---|
+| `Ctrl + O` | 保存（Write Out） |
+| `Ctrl + X` | 終了（Exit） |
+| `Ctrl + K` | 行削除（Cut） |
+| `Ctrl + W` | 検索（Where Is） |
+
+画面下部の `^O` / `^X` の `^` は Ctrl キーを意味する。
+
+---
+
+### Q&A まとめ
+
+**Q: htdemucs と htdemucs_ft はどう違う？なぜ htdemucs を選んだ？**
+
+| モデル | 内部構造 | 速度 | 品質 |
+|---|---|---|---|
+| `htdemucs` | 単一 Transformer モデル | 1x | 標準 |
+| `htdemucs_ft` | 4つの fine-tuned モデルのアンサンブル | 約4倍遅い | わずかに良い |
+
+`_ft` は「fine-tuned」だが実装上は複数モデルのアンサンブルなのでCPU時間が約4倍かかる。今のCPU環境では `htdemucs_ft` は非実用的。Phase 10 で GPU 化したら切り替えを検討する。
+
+**Q: RTX 4060 Ti 8GB GDDR6 は Demucs に足りる？**
+
+VRAM・演算性能ともに余裕。`htdemucs_ft`（VRAM ~6GB 必要）でも動く。ただし現在の Docker 構成は `device="cpu"` ハードコードで CPU 版 PyTorch を使っているため、GPU は使われていない。
+
+**Q: ロックアウト時に UI が反応しなかったのはなぜ？**
+
+サーバー側のロックアウトロジックは正常動作していた（5回失敗で 429 を返す）。ただし frontend が 429 を受け取っても `setError()` でメッセージを出すだけで、ボタンは無効化されない設計だった。Phase 9 で `locked` ステートを追加して 429 受信時に 15分間ボタンを無効化するよう修正した。
+
+**Q: Cloudflare のレートリミット 1015 とは？**
+
+`error code: 1015` は Cloudflare 側のレートリミット。短時間に大量リクエストを送ると、アプリのロックアウトロジックより先に Cloudflare 側で弾かれる。通常のユーザー操作では発動しにくいが、自動化テストで連続リクエストを送ると引っかかる。
