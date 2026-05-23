@@ -586,25 +586,36 @@ function DashboardScreen({ latestResult, onBack }: {
 // =====================
 // メインApp
 // =====================
+// 過去にログイン履歴があるかを覚えておく localStorage キー
+// 起動時の /auth/me 呼び出しはこれが true のときだけ実行し、初回訪問者の 401 をブラウザコンソールに出さない
+const AUTH_HINT_KEY = 'vocal-analyzer-auth-hint'
+
 export default function App() {
   const [auth, setAuth] = useState<AuthState | null>(null)
   const [screen, setScreen] = useState<Screen>('login')
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null)
 
   // 起動時にCookieの有効性を確認してログイン状態を復元する
+  // ただし過去にログイン履歴がない場合は /auth/me を呼ばない（401 によるコンソール汚染を避ける）
   useEffect(() => {
+    if (localStorage.getItem(AUTH_HINT_KEY) !== 'yes') return
+
     fetch(`${API_BASE}/api/v1/auth/me`, { credentials: 'include' })
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data) {
           setAuth({ userId: data.user_id, email: data.email })
           setScreen('upload')
+        } else {
+          // Cookie 期限切れ → 認証ヒントもクリアして次回以降は /auth/me を呼ばない
+          localStorage.removeItem(AUTH_HINT_KEY)
         }
       })
-      .catch(() => {/* Cookie無効 or 未ログイン → login画面のまま */})
+      .catch(() => {/* ネットワーク失敗 → login画面のまま */})
   }, [])
 
   const handleAuthSuccess = (newAuth: AuthState) => {
+    localStorage.setItem(AUTH_HINT_KEY, 'yes')
     setAuth(newAuth)
     setScreen('upload')
   }
@@ -612,6 +623,7 @@ export default function App() {
   const handleLogout = () => {
     fetch(`${API_BASE}/api/v1/auth/logout`, { method: 'POST', credentials: 'include' })
       .finally(() => {
+        localStorage.removeItem(AUTH_HINT_KEY)
         setAuth(null)
         setAnalysisResult(null)
         setScreen('login')

@@ -25,4 +25,10 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     broker_connection_retry_on_startup=True,  # 起動時の接続リトライを明示的に有効化
+    # タスクが固まったときに永遠に走り続けないように時間制限を入れる
+    # soft: SoftTimeLimitExceeded 例外を発生（tasks.py の try/finally で後片付け可能）
+    # hard: プロセス強制kill（後片付けなし）
+    # フロントのポーリング上限（120回 × 5秒 = 10分）に合わせている
+    task_soft_time_limit=540,  # 9分
+    task_time_limit=600,       # 10分
 )

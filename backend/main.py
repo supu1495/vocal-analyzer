@@ -20,8 +20,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # このアプリは GET（取得系）と POST（ログイン・登録・アップロード・ログアウト）のみ使用
+    allow_methods=["GET", "POST"],
+    # JSON / FormData で使う Content-Type のみ許可（Cookie は allow_credentials で別途扱われる）
+    allow_headers=["Content-Type"],
 )
 
 # ルーターを登録

@@ -39,7 +39,7 @@ async def upload_audio(
     - artist_name: アーティスト名（任意）
     - 戻り値: task_id（ステータス確認に使用）
     """
-    _validate_audio_file(audio_file)
+    _validate_audio_content_type(audio_file)
 
     tmp_path = await _stream_to_shared_volume(audio_file)
 
@@ -152,8 +152,8 @@ def get_analysis(
 # ── プライベート関数 ──────────────────────────────────────────────────────────
 
 
-def _validate_audio_file(audio_file: UploadFile) -> None:
-    """ファイル形式を検証する"""
+def _validate_audio_content_type(audio_file: UploadFile) -> None:
+    """ブラウザ側の Content-Type で1次フィルタする（偽装可能なため後段の magic bytes 検証と併用する）"""
     allowed_types = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/x-m4a"]
     if audio_file.content_type not in allowed_types:
         raise HTTPException(
@@ -162,11 +162,40 @@ def _validate_audio_file(audio_file: UploadFile) -> None:
         )
 
 
+def _validate_audio_magic_bytes(head: bytes) -> None:
+    """ファイル先頭バイト（magic bytes）で音声形式を検証する。
+
+    Content-Type はブラウザが付ける任意のヘッダで偽装可能なため、ファイルの実体
+    から判別する。WAV/MP3/M4A 以外は拒否する。
+    """
+    if len(head) < 12:
+        raise HTTPException(status_code=400, detail="ファイルが破損しているか小さすぎます。")
+
+    # WAV: "RIFF" + サイズ(4byte) + "WAVE"
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return
+    # MP3: ID3v2 タグ付き
+    if head[:3] == b"ID3":
+        return
+    # MP3: 裸の MPEG オーディオフレーム sync (0xFFEx〜0xFFFx)
+    if head[0] == 0xFF and (head[1] & 0xE0) == 0xE0:
+        return
+    # M4A: ISO Base Media File Format。offset 4 から "ftyp"
+    if head[4:8] == b"ftyp":
+        return
+
+    raise HTTPException(
+        status_code=400,
+        detail="ファイル内容が WAV/MP3/M4A のいずれにも一致しません。",
+    )
+
+
 async def _stream_to_shared_volume(audio_file: UploadFile) -> str:
     """
     アップロードファイルをチャンク単位で共有ボリュームに書き込む。
 
     50MB を超えた時点で書き込みを中止し、書き途中のファイルを削除して拒否する。
+    最初のチャンクで magic bytes 検証を行い、Content-Type 偽装に対する追加防御とする。
     メモリ使用量を _CHUNK_SIZE 程度に抑えるためファイル全体を一括で読み込まない。
 
     ファイル名衝突を避けるため UUID をプレフィックスに付ける。
@@ -176,9 +205,13 @@ async def _stream_to_shared_volume(audio_file: UploadFile) -> str:
     tmp_path = os.path.join(_UPLOAD_DIR, f"{uuid.uuid4()}{suffix}")
 
     total = 0
+    first_chunk = True
     try:
         with open(tmp_path, "wb") as f:
             while chunk := await audio_file.read(_CHUNK_SIZE):
+                if first_chunk:
+                    _validate_audio_magic_bytes(chunk[:16])
+                    first_chunk = False
                 total += len(chunk)
                 if total > _MAX_FILE_SIZE:
                     raise HTTPException(
