@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.analysis import router as analysis_router
@@ -9,12 +11,14 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# CORS 許可オリジンはカンマ区切りで CORS_ALLOWED_ORIGINS 環境変数から読む
+# 例: "http://localhost:5173,https://vocal-analyzer.supu361.dev"
+_cors_env = os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:5173")
+allowed_origins = [origin.strip() for origin in _cors_env.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "https://vocal-analyzer.supu361.dev",
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

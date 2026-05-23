@@ -22,6 +22,7 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/vocal_analyzer
       - REDIS_URL=redis://redis:6379
       - SECRET_KEY=${SECRET_KEY}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
     depends_on:
       - db
       - redis
