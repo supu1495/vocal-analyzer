@@ -11,8 +11,7 @@ interface AuthState {
 }
 
 interface AnalysisResult {
-  analysis_id: string
-  status: string
+  analysis_id: number
   song_title?: string
   artist_name?: string
   result: {
@@ -134,8 +133,17 @@ function AuthScreen({
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [locked, setLocked] = useState(false)
 
   const isLogin = mode === 'login'
+
+  // ロックアウト(429)を受け取ったら15分間ボタンを無効化する
+  useEffect(() => {
+    if (!locked) return
+    const LOCKOUT_MS = 15 * 60 * 1000
+    const timer = setTimeout(() => setLocked(false), LOCKOUT_MS)
+    return () => clearTimeout(timer)
+  }, [locked])
 
   const handleSubmit = async () => {
     setError('')
@@ -157,6 +165,11 @@ function AuthScreen({
         body: JSON.stringify({ email, password }),
       })
       const data = await res.json()
+      if (res.status === 429) {
+        setLocked(true)
+        setError(data.detail ?? 'ログイン試行回数が上限を超えました。15分後に再試行してください。')
+        return
+      }
       if (!res.ok) throw new Error(data.detail ?? 'エラーが発生しました。')
       onSuccess({ userId: data.user_id, email: data.email })
     } catch (e: unknown) {
@@ -210,16 +223,16 @@ function AuthScreen({
       {error && <p style={{ color: '#f87171', fontSize: '13px', marginBottom: '16px', textAlign: 'center' }}>{error}</p>}
 
       <button
-        onClick={handleSubmit} disabled={loading}
+        onClick={handleSubmit} disabled={loading || locked}
         style={{
           width: '100%', padding: '14px',
-          background: loading ? '#1e1e2e' : 'linear-gradient(135deg, #c084fc, #818cf8)',
+          background: loading || locked ? '#1e1e2e' : 'linear-gradient(135deg, #c084fc, #818cf8)',
           border: 'none', borderRadius: '12px',
-          color: loading ? '#444' : 'white', fontSize: '15px', fontWeight: '700',
-          cursor: loading ? 'not-allowed' : 'pointer', transition: 'all 0.2s ease', marginBottom: '20px',
+          color: loading || locked ? '#444' : 'white', fontSize: '15px', fontWeight: '700',
+          cursor: loading || locked ? 'not-allowed' : 'pointer', transition: 'all 0.2s ease', marginBottom: '20px',
         }}
       >
-        {loading ? '処理中...' : isLogin ? 'ログイン →' : '登録する →'}
+        {locked ? '⏱ ログイン制限中（15分）' : loading ? '処理中...' : isLogin ? 'ログイン →' : '登録する →'}
       </button>
 
       <p style={{ textAlign: 'center', color: '#555', fontSize: '13px' }}>
@@ -276,7 +289,8 @@ function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
       const { task_id } = await res.json()
 
       let analysisId: number | null = null
-      for (let i = 0; i < 60; i++) {
+      const POLL_MAX = 120  // 120回 × 5秒 = 最大10分
+      for (let i = 0; i < POLL_MAX; i++) {
         await new Promise(resolve => setTimeout(resolve, 5000))
         setPollCount(i + 1)
         const statusRes = await fetch(`${API_BASE}/api/v1/analysis/status/${task_id}`, { credentials: 'include' })
@@ -330,7 +344,7 @@ function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
           分析中{dots}
         </h2>
         <p style={{ color: '#555', fontSize: '13px', marginBottom: '32px' }}>
-          AIが歌声を解析しています（最大5分かかる場合があります）
+          AIが歌声を解析しています（最大10分かかる場合があります）
         </p>
 
         {(songTitle || artistName) && (
@@ -344,7 +358,7 @@ function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
         )}
 
         {pollCount > 0 && (
-          <p style={{ color: '#333', fontSize: '12px' }}>{pollCount * 5}秒経過 / 最大300秒</p>
+          <p style={{ color: '#333', fontSize: '12px' }}>{pollCount * 5}秒経過 / 最大600秒</p>
         )}
       </div>
     )
