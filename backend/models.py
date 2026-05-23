@@ -59,9 +59,8 @@ class AnalysisResult(Base):
     __tablename__ = "analysis_results"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    # 認証実装前はNullableにしておく（Phase 4完了後にNOT NULLへ変更予定）
-    user_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("users.id"), nullable=True, index=True
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id"), nullable=False, index=True
     )
     song_title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     artist_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
@@ -90,4 +89,4 @@ class AnalysisResult(Base):
     )
 
     # リレーション
-    user: Mapped["User | None"] = relationship("User", back_populates="analysis_results")
+    user: Mapped["User"] = relationship("User", back_populates="analysis_results")

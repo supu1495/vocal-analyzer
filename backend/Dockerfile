@@ -14,4 +14,4 @@ RUN pip install --no-cache-dir --no-deps crepe==0.0.13 && \
 
 COPY . .
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

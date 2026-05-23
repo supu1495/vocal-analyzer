@@ -7,8 +7,8 @@ import os
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
-from celery.result import AsyncResult
 
+from celery_app import celery_app
 from tasks import analyze_audio_task
 from auth_utils import get_current_user
 from database import get_db
@@ -18,6 +18,10 @@ router = APIRouter(prefix="/api/v1/analysis", tags=["analysis"])
 
 # 共有ボリュームの一時ファイル置き場
 _UPLOAD_DIR = "/tmp/vocal_analyzer"
+
+# アップロード上限とストリーミング読み込みのチャンクサイズ
+_MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+_CHUNK_SIZE = 1024 * 1024           # 1MB
 
 
 @router.post("/upload")
@@ -37,10 +41,7 @@ async def upload_audio(
     """
     _validate_audio_file(audio_file)
 
-    content = await audio_file.read()
-    _validate_file_size(content)
-
-    tmp_path = _save_to_shared_volume(audio_file.filename, content)
+    tmp_path = await _stream_to_shared_volume(audio_file)
 
     task = analyze_audio_task.delay(tmp_path, song_title, artist_name, current_user.id)
 
@@ -61,7 +62,8 @@ def get_analysis_status(
     - task_id: アップロード時に返された task_id
     - 戻り値: status（PENDING / SUCCESS / FAILURE）と analysis_id（完了時のみ）
     """
-    result = AsyncResult(task_id)
+    # アプリを明示的に渡さないと DisabledBackend を見に行って AttributeError になる
+    result = celery_app.AsyncResult(task_id)
 
     if result.status == "SUCCESS":
         return {"status": "SUCCESS", "analysis_id": result.result}
@@ -160,28 +162,36 @@ def _validate_audio_file(audio_file: UploadFile) -> None:
         )
 
 
-def _validate_file_size(content: bytes) -> None:
-    """ファイルサイズを検証する（50MB超は拒否）"""
-    max_size = 50 * 1024 * 1024
-    if len(content) > max_size:
-        raise HTTPException(
-            status_code=400,
-            detail="ファイルサイズが大きすぎます。50MB以下にしてください。",
-        )
-
-
-def _save_to_shared_volume(filename: str, content: bytes) -> str:
+async def _stream_to_shared_volume(audio_file: UploadFile) -> str:
     """
-    共有ボリュームに一時ファイルを保存してパスを返す
+    アップロードファイルをチャンク単位で共有ボリュームに書き込む。
 
-    ファイル名の衝突を防ぐため UUID をプレフィックスに付ける
+    50MB を超えた時点で書き込みを中止し、書き途中のファイルを削除して拒否する。
+    メモリ使用量を _CHUNK_SIZE 程度に抑えるためファイル全体を一括で読み込まない。
+
+    ファイル名衝突を避けるため UUID をプレフィックスに付ける。
     """
     os.makedirs(_UPLOAD_DIR, exist_ok=True)
-    suffix = os.path.splitext(filename)[1]
+    suffix = os.path.splitext(audio_file.filename)[1]
     tmp_path = os.path.join(_UPLOAD_DIR, f"{uuid.uuid4()}{suffix}")
-    with open(tmp_path, "wb") as f:
-        f.write(content)
-    return tmp_path
+
+    total = 0
+    try:
+        with open(tmp_path, "wb") as f:
+            while chunk := await audio_file.read(_CHUNK_SIZE):
+                total += len(chunk)
+                if total > _MAX_FILE_SIZE:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="ファイルサイズが大きすぎます。50MB以下にしてください。",
+                    )
+                f.write(chunk)
+        return tmp_path
+    except Exception:
+        # 中止時は書き途中のファイルを残さない
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
 
 
 def _calculate_growth_rate(pitch_values: list[float]) -> int:

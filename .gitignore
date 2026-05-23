@@ -14,6 +14,7 @@ dist/
 
 # Docker
 postgres_data/
+docker-compose.override.yml
 
 # OS
 .DS_Store

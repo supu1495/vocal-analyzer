@@ -64,6 +64,10 @@ def analyze_audio_task(
         db.commit()
         db.refresh(record)
         return record.id
+    except Exception:
+        # commit 前後で例外が出てもセッションを安全な状態に戻す
+        db.rollback()
+        raise
     finally:
         # 著作権保護のため分析完了後に即時削除する
         if os.path.exists(tmp_path):
