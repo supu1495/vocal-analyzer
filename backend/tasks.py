@@ -10,8 +10,16 @@ from database import SessionLocal
 from audio.analyzer import AudioAnalyzer
 from models import AnalysisResult
 
-# Demucs モデルのロードが重いため Worker 起動時に1回だけ初期化する
-_audio_analyzer = AudioAnalyzer()
+# fork 後の各 worker プロセスで初回タスク実行時に遅延初期化する
+# モジュールレベルで初期化すると PyTorch が fork 前に読み込まれデッドロックする
+_audio_analyzer: AudioAnalyzer | None = None
+
+
+def _get_analyzer() -> AudioAnalyzer:
+    global _audio_analyzer
+    if _audio_analyzer is None:
+        _audio_analyzer = AudioAnalyzer()
+    return _audio_analyzer
 
 
 @celery_app.task
@@ -35,7 +43,7 @@ def analyze_audio_task(
     """
     db = SessionLocal()
     try:
-        result = _audio_analyzer.analyze(tmp_path)
+        result = _get_analyzer().analyze(tmp_path)
         score_matrix = result.get("score_matrix", {})
 
         record = AnalysisResult(

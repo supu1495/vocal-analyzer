@@ -14,6 +14,7 @@ hmmlearn==0.3.3
 demucs==4.0.1
 librosa==0.10.1
 numpy==1.26.3
+scipy==1.10.1
 soundfile==0.12.1
 torch==2.1.2
 torchaudio==2.1.2
