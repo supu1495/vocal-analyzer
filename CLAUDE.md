@@ -137,10 +137,10 @@
 
 ## 現在の状態
 
-- **作業ブランチ**: `phase9`
-- **mainブランチ**: Phase 8まで全てマージ済み。Phase 9 のマージは `phase9` ブランチで進行中
+- **作業ブランチ**: `main`
+- **mainブランチ**: Phase 9 + セキュリティ強化（feature/security-hardening）までマージ済み
 - **ローカル動作確認**: Docker Compose で全6サービス起動確認済み（2026-05-24）
-- **本番動作確認**: CF Pages（`vocal-analyzer.supu361.dev`）+ CF Tunnel（`vocal-api.supu361.dev`）→ 自宅PC Docker Compose で動作確認済み
+- **本番動作確認**: CF Pages + CF Tunnel で動作確認済み
 - **注意**: port 80 はホスト側の Apache が競合する場合あり。その場合は `http://localhost:5173` に直接アクセス（Viteの proxy 設定で `/api/*` は backend に転送される）
 
 ---
@@ -174,32 +174,36 @@ crepeを `--no-deps` でインストールしてhmmlearnのpybind11競合を回�
 
 ## 次にやるべきこと
 
-### Phase 10以降
+### 開発ロードマップ（Phase 10〜13）
+
+```
+Phase 10準備 → 10a(GPU) → 10b(精度) → 10c(D1) → Phase 11 → Phase 12 → Phase 13
+```
 
 | フェーズ | 内容 |
 |---|---|
-| Phase 10 | 精度確認（実際のカラオケ録音を使った検出精度の検証）+ GPU化（RTX 4060 Ti を活用） + CF D1 への移行（PostgreSQL → SQLite） |
-| Phase 11 | 時系列成長分析（録音日時の手動入力・スコア推移・練習継続率の可視化） |
+| Phase 10 準備 | App.tsx 分割・ドキュメント整理・ロギング実装・シードスクリプト |
+| Phase 10a | GPU化（CUDA PyTorch + RTX 4060 Ti）・Docker改善（healthcheck・ログローテーション）・接続情報管理 |
+| Phase 10b | 精度確認（実音声での閾値調整・技法検出バグ修正）・スコア表示のフロント反映・分析進捗表示 |
+| Phase 10c | CF D1 移行（PostgreSQL → SQLite）・セキュリティ強化（JWTブラックリスト・レート制限・CSP）・ゲスト分析仕様確定・`hashed_password` デフォルト見直し |
+| Phase 11 | 時系列成長分析・一括アップロード/日付指定・分析キャンセル・PC版UI・ローカルLLMフィードバック・フロントエンドテスト・CVEスキャン |
+| Phase 12 | アクセント/ハンマリング検出・楽曲構造検出・声紋登録/比較・録音ガイドUI・話者分離/テスト発声・発音ごまかし検出 |
+| Phase 13 | おすすめ楽曲提案・ビブラートの意図識別（根本解決・リファレンス楽曲比較） |
 
-**Phase 10 で予定している3つの大きな作業:**
+10a（GPU化）を精度確認より先にやることで、10b で実音声を繰り返し分析する際の処理速度と品質（htdemucs_ft）が向上する。
 
-1. **精度確認**: 実音声で技法検出・スコア計算の精度を検証し、必要なら閾値を調整する
-2. **GPU化**: WSL2 + NVIDIA Container Toolkit + CUDA版 PyTorch を導入して RTX 4060 Ti を活用。`htdemucs_ft`（より高品質なDemucsモデル）への切り替えも検討
-3. **CF D1 移行**: PostgreSQL（SQLAlchemy）から SQLite ベースの CF D1 への移行。アプリケーションコードの書き直しが必要
+### 設計決定事項（2026-05-27 確定）
 
-### 技術的負債・将来対応
+- **LLM フィードバック（Phase 11）**: ローカル LLM（Ollama 等 + RTX 4060 Ti）で実装。外部 API 費用を増やさない。分析完了後に GPU を排他利用して推論
+- **発音ごまかし検出（Phase 12）**: Whisper 音素分析でメイン分析後に別工程実行。録音全体で同じ言葉 → ごまかし検出。部分的に同じ言葉 → 歌詞と推測し除外
+- **開発方針**: 追加の金銭的費用を極力発生させない
 
-- **CF D1 への部分移行（Phase 10予定）**: 現在は自宅PC + CF Tunnel 構成で動かしているが、Phase 10 で PostgreSQL（SQLAlchemy + Alembic）から CF D1（SQLite）への移行を計画中。CF Workers（API）/ CF R2（ファイル一時保存）への移行は FastAPI の書き直しが必要なため当面見送り
-- **GPU 化（Phase 10予定）**: ホストマシンに RTX 4060 Ti 8GB を搭載しているが、現在の Docker 構成は CPU 版 PyTorch を使用しており GPU を活用できていない。Phase 10 で WSL2 + NVIDIA Container Toolkit + CUDA 版 PyTorch を導入予定
-- **Cloudflare Tunnel のエグレスについて**: 分析結果（JSON）の返却はエグレスに該当するが、データ量がKB単位のテキストのため実質問題なし。CF Tunnelの無料プランには明示的な帯域制限の記載がなく、禁止されているのは「動画・音声ファイルの大量配信」であり今回の用途とは異なる
-- **本番環境の接続情報管理**: Phase 9 で `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` を環境変数化済み。本格的な本番運用時には AWS Secrets Manager 等のシークレット管理ツールで注入する形に移行する
-- **PC版UI実装**: 現状はスマートフォン向けレイアウト。PC向けレスポンシブ対応またはPC専用レイアウトを追加する
-- **複数ファイル一括アップロード・日付指定機能**: 複数の音声ファイルを一度に投下する機能、および録音日時を手動で指定して登録する機能（後日まとめてアップロードしても正しい日時で記録できるようにする。Phase 11 の時系列成長分析と合わせて実装予定）
-- **アクセント・ハンマリング検出**: DAM AI HEART を参考に追加予定の歌唱技法。Phase 7完了後に検討（詳細は SPEC.md「将来検討」参照）
-- **分析進捗表示**: 解析中の残り時間・プログレスバーをUIに表示。Phase 8（Celery非同期）と連動して実装
-- **score_matrix / vocal_range のフロントエンド表示**: backend は Phase 7 で `total_score` / `faithfulness_score` / `technique_score` / `naturalness_penalty` / `vocal_range` を計算・DB保存しているが、frontend は無視して `(pitch + rhythm) / 2` の単純平均で「総合評価」を表示している。Phase 10（精度確認）または Phase 11 でフロントを修正する
-- **録音ガイドUI**: 音量・距離・ノイズを視覚的にチェックする機能。カラオケ機器の機種差による品質ばらつきを軽減する目的
-- **話者分離・歌声検出のテスト発声**: 他の人の声の除去・歌声と話し声の判別。分析前のテスト発声で声のプロファイルを取得する（詳細は SPEC.md「将来検討」参照）
+### 注意事項
+
+- **Cloudflare Tunnel のエグレス**: 分析結果（JSON）はKB単位のテキストのため実質問題なし
+- **score_matrix / vocal_range のフロント未反映**: backend は計算済みだが frontend は `(pitch + rhythm) / 2` の単純平均で表示中。Phase 10b で修正予定
+
+全項目の詳細は `TODO_NEXT_SESSION.md` を参照。
 
 ---
 
