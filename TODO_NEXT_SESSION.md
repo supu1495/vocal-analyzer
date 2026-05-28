@@ -217,14 +217,11 @@ DB層・認証層を触る作業をまとめた。
 
 ## 推奨される次回作業の進め方
 
-### Step 1: feature/phase10a-gpu を main にマージ
+### Step 1: `feature/phase10a-gpu` ブランチを継続（main にはまだマージしない）
 
-```bash
-git checkout main
-git merge feature/phase10a-gpu
-```
+Phase 10a は #33 が未完のため、同ブランチ上で作業を続行する。
 
-### Step 2: #33 を Phase 10a の締めとして実施（小さく終わらせる）
+### Step 2: #33 を実施して Phase 10a を締める
 
 **現実的なスコープに修正**: 自宅 PC + CF Tunnel の構成では AWS Secrets Manager 等の本格ツールは過剰。以下の組み合わせを提案：
 
@@ -236,7 +233,13 @@ git merge feature/phase10a-gpu
 
 C（Docker Secrets 化）は home PC では効果薄なので見送り。
 
-### Step 3: Phase 10b（精度確認 + 技法バグ修正）に進む
+### Step 3: Phase 10a を main にマージしてから Phase 10b（精度確認 + 技法バグ修正）に進む
+
+```bash
+git checkout main
+git merge feature/phase10a-gpu
+git checkout -b feature/phase10b-accuracy
+```
 
 GPU化は見送ったが Phase 10b は CPU で進められる。GPU 化は Phase 10c 以降で再挑戦するときの選択肢：
 - TF を `tensorflow[and-cuda]` に置き換え（イメージ +1〜2GB）

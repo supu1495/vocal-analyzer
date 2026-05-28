@@ -78,7 +78,7 @@
 
 ## 現在の状態
 
-- **作業ブランチ**: `feature/phase10a-gpu`（マージ待ち）
+- **作業ブランチ**: `feature/phase10a-gpu`（#33 が未実施のため main マージ前）
 - **mainブランチ**: Phase 10 準備までマージ済み
 - **ローカル動作確認**: Docker Compose で全6サービス起動確認済み（healthcheck・ログローテーション設定済み）
 - **本番動作確認**: CF Pages + CF Tunnel で動作確認済み
