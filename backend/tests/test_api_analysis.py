@@ -98,7 +98,7 @@ def test_get_analysis_status_unauthenticated(client):
 
 def test_get_analysis_status_success(client):
     _register_and_login(client)
-    with patch("api.analysis.AsyncResult") as mock_async_result:
+    with patch("api.analysis.celery_app.AsyncResult") as mock_async_result:
         mock_async_result.return_value.status = "SUCCESS"
         mock_async_result.return_value.result = 42
         res = client.get("/api/v1/analysis/status/some-task-id")
@@ -108,7 +108,7 @@ def test_get_analysis_status_success(client):
 
 def test_get_analysis_status_pending(client):
     _register_and_login(client)
-    with patch("api.analysis.AsyncResult") as mock_async_result:
+    with patch("api.analysis.celery_app.AsyncResult") as mock_async_result:
         mock_async_result.return_value.status = "PENDING"
         res = client.get("/api/v1/analysis/status/some-task-id")
     assert res.status_code == 200

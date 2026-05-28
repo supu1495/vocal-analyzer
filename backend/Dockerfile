@@ -7,9 +7,8 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-# crepeを依存関係チェックなしでインストール
-RUN pip install --no-cache-dir --no-deps crepe==0.0.13 && \
+COPY requirements.txt requirements-nodeps.txt ./
+RUN pip install --no-cache-dir --no-deps -r requirements-nodeps.txt && \
     pip install --no-cache-dir -r requirements.txt
 
 COPY . .

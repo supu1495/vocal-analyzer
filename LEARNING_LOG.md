@@ -4065,3 +4065,378 @@ VRAM・演算性能ともに余裕。`htdemucs_ft`（VRAM ~6GB 必要）でも�
 **Q: Cloudflare のレートリミット 1015 とは？**
 
 `error code: 1015` は Cloudflare 側のレートリミット。短時間に大量リクエストを送ると、アプリのロックアウトロジックより先に Cloudflare 側で弾かれる。通常のユーザー操作では発動しにくいが、自動化テストで連続リクエストを送ると引っかかる。
+
+---
+
+## App.tsx をファイル分割するときの設計判断（Phase 10 準備）
+
+670行の App.tsx を types / components / screens に分割した。分割そのものよりも「なぜ types.ts を独立させるか」がポイント。
+
+画面を別ファイルに分割すると、複数の画面コンポーネントから同じ型・定数（`AnalysisResult`、`API_BASE`、`calcTotalScore`）を使う。これらを App.tsx に残したまま各画面から import すると「App → screens」と「screens → App」の双方向の依存になる。動くケースはあるが構造として不自然。
+
+`types.ts` に共通要素を切り出すと依存の向きが一方通行になる：
+
+```
+types.ts ← App.tsx
+types.ts ← screens/*.tsx
+types.ts ← components/*.tsx
+```
+
+技術的に必須ではない（App.tsx に置いても動く）。ただし画面分割の目的が「ファイル間の責務を明確にする」ことなので、共有要素も分けるのが自然。
+
+最終構成：
+
+| ファイル | 行数 | 役割 |
+|---|---|---|
+| `App.tsx` | 96 | ルーティング・認証状態管理・ヘッダー |
+| `types.ts` | 38 | 型定義・定数・ユーティリティ |
+| `components/ScoreRing.tsx` | 25 | スコア円グラフ |
+| `components/TechniqueBar.tsx` | 17 | 技法バー |
+| `components/LineChart.tsx` | 30 | 折れ線グラフ |
+| `screens/AuthScreen.tsx` | 126 | ログイン / 登録 |
+| `screens/UploadScreen.tsx` | 187 | アップロード + ポーリング |
+| `screens/ResultScreen.tsx` | 60 | 分析結果表示 |
+| `screens/DashboardScreen.tsx` | 90 | 統計ダッシュボード |
+
+---
+
+## SVG `strokeDashoffset` で円形プログレス表示
+
+`ScoreRing.tsx` で「スコアに応じて円が一部だけ塗られる」表現を実装している。仕組みは SVG の `<circle>` 要素の `strokeDasharray` と `strokeDashoffset` の組み合わせ。
+
+```tsx
+const r = 36
+const circ = 2 * Math.PI * r  // 円周
+const offset = circ - (score / 100) * circ
+```
+
+- `strokeDasharray={circ}` → 破線パターンの長さを円周全体に設定
+- `strokeDashoffset={offset}` → 描画開始位置をずらす = その分だけ線が消える
+
+スコアと表示の対応：
+- 100点 → offset = 0 → 円が全部描かれる（満円）
+- 50点 → offset = 円周の半分 → 円が半分だけ描かれる
+- 0点 → offset = 円周全体 → 線が一切描かれない
+
+`transform="rotate(-90 44 44)"` で開始点を真上に変更している（デフォルトは右）。
+
+---
+
+## TypeScript の `useState<T>(...)` で型指定が必要なケース
+
+`useState` の型指定は初期値から推論できる場合は不要、できない場合だけ書く。
+
+| パターン | 型指定 | 理由 |
+|---|---|---|
+| `useState(false)` | 不要 | 初期値 `false` から `boolean` と分かる |
+| `useState('')` | 不要 | 初期値 `''` から `string` と分かる |
+| `useState<File \| null>(null)` | **必要** | 初期値 `null` だけでは「後で File が入る」ことを推論できない |
+
+`null` だけだと TypeScript は「これは `null` 型」としか判断できないので、後で `setFile(ファイルオブジェクト)` しようとすると型エラーになる。`<File | null>` で「この state は File か null のどちらか」と明示する。
+
+---
+
+## Python `logging` モジュールの構造
+
+ロギング実装で使った Python 標準 `logging` モジュールは3つの部品でできている。
+
+| 部品 | 役割 | 例 |
+|---|---|---|
+| **Logger** | コードから呼び出す入口 | `logger.info("メッセージ")` |
+| **Handler** | ログをどこに送るかを決める | 標準出力・ファイル・ネットワーク等 |
+| **Formatter** | ログの見た目を決める | `[INFO] message` / `2026-05-28 ... message` |
+
+### `logger = logging.getLogger(__name__)` のメリット
+
+`__name__` はその Python ファイルがモジュールとして読み込まれた時のパス。
+
+| ファイル | `__name__` の値 |
+|---|---|
+| `backend/main.py` | `"main"` |
+| `backend/api/auth.py` | `"api.auth"` |
+| `backend/audio/analyzer.py` | `"audio.analyzer"` |
+
+ログ出力時にどのファイルから出たログか分かる：
+
+```
+2026-05-28 12:34:56 [INFO] main: Application starting
+2026-05-28 12:34:57 [WARNING] api.auth: Login failed
+2026-05-28 12:34:58 [DEBUG] audio.analyzer: Separator: 8.45s
+```
+
+階層構造で「audio 配下だけ DEBUG にしたい」のように一括設定もできる：
+
+```python
+logging.getLogger("audio").setLevel(logging.DEBUG)
+```
+
+### `basicConfig(..., force=True)` の意味
+
+uvicorn や celery は起動時に自分でハンドラを設定する。`logging.basicConfig()` はデフォルトでは「ハンドラが既に設定されていたら何もしない」動作なので、自分のフォーマットが効かない。`force=True` を付けると既存ハンドラを取り除いてから設定し直してくれる。
+
+### `as e` で例外オブジェクトを取り出す
+
+```python
+except (jwt.InvalidTokenError, KeyError, ValueError) as e:
+    logger.warning("JWT validation failed: %s", e)
+```
+
+`as e` を付けると例外オブジェクトを変数 `e` で受け取れる。これがないと「失敗した」ことしか分からない。
+
+`jwt.InvalidTokenError` は複数の派生例外を1まとめに受け取っているため、`e` の内容で原因の区別がつく：
+
+| 例外 | 原因 |
+|---|---|
+| `jwt.ExpiredSignatureError` | 有効期限切れ（運用上 OK） |
+| `jwt.InvalidSignatureError` | 署名が改ざんされた（攻撃の可能性） |
+| `jwt.DecodeError` | トークンの形式が壊れている |
+| `KeyError` | `sub` フィールドが無い |
+| `ValueError` | `sub` が数値に変換できない |
+
+`logger.exception(...)` は `logger.error(...)` とほぼ同じだが、現在キャッチ中の例外のスタックトレースを自動で付けてくれる。エラー時のデバッグでは必須。
+
+---
+
+## pip の `--no-deps` と requirements ファイル分割の理由
+
+crepe は依存関係を持たずにインストールする必要がある（旧バージョンの hmmlearn を要求するが pybind11 と競合するため）。普通の `requirements.txt` には書けず、`requirements-nodeps.txt` という別ファイルに分けた。
+
+### `--no-deps` とは
+
+`pip install` は通常こう動く：
+
+```
+pip install crepe
+  → crepe をダウンロード
+  → crepe の依存パッケージリストを読む
+  → 依存パッケージ（hmmlearn など）も自動でダウンロード・インストール
+  → crepe 本体をインストール
+```
+
+`--no-deps` を付けると、依存パッケージのインストールをスキップする：
+
+```
+pip install --no-deps crepe
+  → crepe 本体だけインストール（依存パッケージは無視）
+```
+
+### なぜ requirements.txt 1本にまとめられないか
+
+`--no-deps` は **`pip install` コマンド全体に対するフラグ**であって、パッケージ単位の指定ではない。
+
+```bash
+pip install --no-deps -r requirements.txt
+```
+
+これだと全パッケージ（fastapi も sqlalchemy も）が依存無視でインストールされてしまう。fastapi なら starlette が、sqlalchemy なら greenlet が一緒に入らないので、アプリ全体が壊れる。
+
+requirements.txt はパッケージ単位の細かいオプション（`--hash`、`--no-binary` 等）は一部サポートしているが、`--no-deps` のような「全体の挙動を変えるフラグ」は対応していない。
+
+### 結論
+
+`--no-deps` 適用パッケージと通常パッケージを共存させるには、**ファイルを分けて pip を2回実行**するしかない。
+
+```dockerfile
+COPY requirements.txt requirements-nodeps.txt ./
+RUN pip install --no-cache-dir --no-deps -r requirements-nodeps.txt && \
+    pip install --no-cache-dir -r requirements.txt
+```
+
+---
+
+## YAML アンカー機能で docker-compose.yml の重複を減らす
+
+ログローテーション設定（4行のブロック）を6サービスに付けるとき、コピペで6回書くより YAML 標準のアンカー機能で1箇所に定義してから参照する方が保守しやすい。
+
+```yaml
+x-logging: &default-logging      # 「default-logging という名前で覚えておく」
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  frontend:
+    logging: *default-logging    # 「さっきの default-logging を持ってくる」
+  backend:
+    logging: *default-logging
+  # ...
+```
+
+| 記号 | 意味 |
+|---|---|
+| `&name` | **アンカー（定義）**: ここの値に name という名札を付ける |
+| `*name` | **エイリアス（参照）**: name の値をここに展開する |
+
+YAML パーサが読み込むと、内部的にはアンカーなしの長いバージョンと完全に同じ意味に展開される。Docker Compose 側は特別な対応をしているわけではなく、YAML の標準機能をそのまま利用しているだけ。
+
+### `x-` 接頭辞の意味
+
+Docker Compose は知らないキーがあると警告を出すことがあるが、`x-` で始まるキーは「Compose 仕様外の補助設定」として無視するルールがある。アンカー専用のキーをここに置くのが慣習。
+
+---
+
+## Docker healthcheck の仕組み
+
+`docker compose ps` の `Up` は「プロセスが終了せずに動き続けている」という意味でしかなく、サービスが正常動作しているかは別問題。
+
+```
+NAME           STATUS
+backend-1      Up 5 minutes
+db-1           Up 5 minutes
+```
+
+実際には：
+- DB が起動完了して接続を受け付けている → Up
+- DB が起動中で接続を受け付けていない → これも Up
+- DB がフリーズして応答しない → これも Up
+
+healthcheck は「コンテナ内で定期的にコマンドを実行して、本当に正常動作しているか確認する仕組み」。
+
+```yaml
+healthcheck:
+  test: ["CMD-SHELL", "pg_isready -U postgres"]
+  interval: 10s   # 10秒ごとに実行
+  timeout: 5s     # 5秒以内に終わらなければ失敗扱い
+  retries: 3      # 3回連続で失敗したら unhealthy 判定
+  start_period: 10s  # 起動直後の猶予期間（この間の失敗はカウントしない）
+```
+
+設定後の `docker compose ps`：
+
+```
+NAME           STATUS
+db-1           Up 5 minutes (healthy)        ← 正常動作中
+backend-1      Up 5 minutes (unhealthy)      ← 起動はしてるが動いてない！
+redis-1        Up 5 minutes (health: starting) ← まだチェック中
+```
+
+### サービス別のチェックコマンド
+
+| サービス | コマンド | 何を見ているか |
+|---|---|---|
+| db (PostgreSQL) | `pg_isready -U postgres` | PostgreSQL が接続受付中か |
+| redis | `redis-cli ping` | PONG が返るか |
+| backend | `python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"` | /health が 200 を返すか |
+| celery_worker | `celery -A celery_app inspect ping` | Worker が応答するか |
+
+backend は curl が Dockerfile に入っていないため Python 標準ライブラリだけで実装した（Dockerfile の修正を回避）。
+
+### 起動順序の制御
+
+healthcheck なしの `depends_on: - db` は「DB のプロセスが起動した瞬間」に依存サービスを起動するため、PostgreSQL が初期化中で接続不可の数秒間でエラーが出る可能性がある。
+
+healthcheck ありなら：
+
+```yaml
+backend:
+  depends_on:
+    db:
+      condition: service_healthy
+```
+
+DB が本当に使える状態になってから backend が起動する。
+
+### 適用サービスの判断
+
+すべてに付けるかは状況次第。今回は「実用価値の高い4サービス」（db / redis / backend / celery_worker）に絞った。
+
+| サービス | 適用 | 理由 |
+|---|---|---|
+| db / redis | 必須 | 依存元のため |
+| backend | 必須 | フロント・nginx の依存元 |
+| celery_worker | 推奨 | バックグラウンドで動くサービスはサイレント障害が起きやすい |
+| nginx | 任意 | backend が unhealthy なら自動的に 502 を返すので別途検知できる |
+| frontend (Vite dev) | 任意 | 本番では使われない |
+
+---
+
+## Docker ログローテーション
+
+Docker はデフォルトでログを永遠にホストのディスクに書き続ける。長時間運用すると celery_worker（Demucs/Crepe のログが多い）が GB 単位のログを溜めてホストのディスクを圧迫する。
+
+`logging` ドライバの設定で「ログを一定サイズで分割し、古いものを自動削除」できる。
+
+```yaml
+logging:
+  driver: json-file
+  options:
+    max-size: "10m"   # 1ファイルあたり最大10MB
+    max-file: "3"     # 3世代保持。古いものから削除
+```
+
+これでログは最大 `10MB × 3 = 30MB` 程度に抑えられる。
+
+### Redis のデータ vs Redis のログ
+
+Redis は短期記憶（RAM 上にデータを置く）のイメージがあるが、Docker コンテナとしての Redis は他と同じく標準出力にログを吐いている。それが Docker により JSON ファイルとしてホストのディスクに書かれる。**データとログは別物**で、データが揮発性でもログは永続的に蓄積する。
+
+Redis 自体のログ量は少ない（起動メッセージ・たまの BGSAVE 完了等）が、設定の一貫性と想定外の事態（頻繁な再起動エラー等）への備えとしてログローテーションを入れておく価値はある。
+
+---
+
+## PyTorch CUDA vs TensorFlow CUDA の違い（GPU 化失敗から）
+
+Phase 10a で Demucs（PyTorch）の GPU 化を試みたが、Crepe（TensorFlow）の制約で見送った。失敗から学んだこと。
+
+### 環境の事前確認
+
+| 項目 | 状態 |
+|---|---|
+| WSL2 で GPU 認識 | ✅ RTX 4060 Ti 8GB |
+| NVIDIA Container Toolkit | ✅ Docker に `nvidia` ランタイム登録済み |
+| PyTorch のビルド | ✅ **既に CUDA 12.1 ビルド**（`2.1.2+cu121`）が入っている |
+| コンテナから GPU 見える | ❌ docker-compose.yml で渡していなかった |
+
+docker-compose.yml の celery_worker に GPU 設定を追加することで PyTorch から GPU が見えるようになった：
+
+```yaml
+deploy:
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: all
+          capabilities: [gpu]
+```
+
+### PyTorch と TensorFlow の CUDA 同梱方式の違い
+
+| ライブラリ | CUDA サポート | 状態 |
+|---|---|---|
+| PyTorch (Demucs) | バンドル済み（`+cu121`） | ✅ コンテナにも入っている |
+| TensorFlow (Crepe) | 別途インストール必要（cuDNN / libdevice / ptxas 等） | ❌ コンテナにない |
+
+PyTorch は CUDA ランタイムを wheel に同梱してくれる。一方 TensorFlow は別途 cuDNN や libdevice、ptxas（XLA JIT に必要）を OS レベルでインストールする必要がある。
+
+### TF を CPU 固定にしようとして失敗した試み
+
+すべて効かなかった：
+
+1. **`tf.config.set_visible_devices([], "GPU")`** — TF が import 時点で既に GPU を検出済みのため遅すぎる
+2. **`CUDA_VISIBLE_DEVICES=-1` を import 前後で setup/restore** — Celery が fork でワーカーを作るため、子プロセスは復元後の状態を継承して GPU を見つけてしまう
+3. **`TF_XLA_FLAGS=--tf_xla_auto_jit=0`** — Crepe 内部の `@tf.function` による JIT は止められない
+
+### Celery fork ベース concurrency と CUDA の罠
+
+Celery はデフォルトで `prefork` プールを使い、ワーカープロセスを fork で作る。fork は親プロセスのメモリを子にコピーするが、CUDA コンテキストは OS/ドライバレベルなので fork で正しく継承されない。これを避けるため tasks.py で AudioAnalyzer を遅延初期化している（fork 後に初めて CUDA を触る）：
+
+```python
+_audio_analyzer: AudioAnalyzer | None = None
+
+def _get_analyzer() -> AudioAnalyzer:
+    global _audio_analyzer
+    if _audio_analyzer is None:
+        _audio_analyzer = AudioAnalyzer()  # 子プロセスで初めて初期化
+    return _audio_analyzer
+```
+
+### 結論
+
+同一プロセスで「PyTorch だけ GPU、TensorFlow だけ CPU」を両立するのは想像以上に難しい。理論上の選択肢：
+
+- **A** GPU 化を諦めて CPU に戻す（Phase 10a で採用）
+- **B** TF の CUDA 依存ライブラリ（cuDNN, libdevice 等）をコンテナに追加（イメージサイズ +1〜2GB）
+- **C** Crepe を別プロセスで実行して TF と PyTorch の CUDA 状態を分離
+
+Phase 10c 以降で B または C を検討する。

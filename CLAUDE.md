@@ -78,9 +78,9 @@
 
 ## 現在の状態
 
-- **作業ブランチ**: `main`
-- **mainブランチ**: Phase 9 + セキュリティ強化（feature/security-hardening）までマージ済み
-- **ローカル動作確認**: Docker Compose で全6サービス起動確認済み（2026-05-24）
+- **作業ブランチ**: `feature/phase10a-gpu`（マージ待ち）
+- **mainブランチ**: Phase 10 準備までマージ済み
+- **ローカル動作確認**: Docker Compose で全6サービス起動確認済み（healthcheck・ログローテーション設定済み）
 - **本番動作確認**: CF Pages + CF Tunnel で動作確認済み
 - **注意**: port 80 はホスト側の Apache が競合する場合あり。その場合は `http://localhost:5173` に直接アクセス（Viteの proxy 設定で `/api/*` は backend に転送される）
 
@@ -93,6 +93,12 @@
 **Demucs（Phase 8）:** `backend/audio/separator.py` は Demucs v4 で実装済み。モデルは `htdemucs`（標準）を使用。Celery Worker コンテナで非同期実行するため CPU 処理の遅さはユーザー体験に影響しない（`htdemucs_ft` は4倍重いアンサンブルモデルのためCPUでは非実用的。GPU 化のタイミングで切り替えを検討する。Phase 10以降で対応）。
 
 **Crepe採用:** 精度重視のためlibrosa.pyinへの変更はしない。
+
+**GPU 化見送り（Phase 10a で挑戦・失敗）:** Demucs（PyTorch）の GPU 化は環境としては動作確認済み（WSL2 で `nvidia-smi` OK・NVIDIA Container Toolkit 導入済み・PyTorch は `+cu121` ビルド）。しかし Crepe が依存する TensorFlow が同コンテナで GPU を検出すると XLA JIT コンパイル時に `libdevice` / `ptxas` を要求して失敗する。`tf.config.set_visible_devices`・`CUDA_VISIBLE_DEVICES` env 操作・`TF_XLA_FLAGS` での XLA 無効化のいずれも効かなかった（TF の遅延初期化・fork 後の再検出・`@tf.function` 内の JIT が原因）。
+
+Phase 10a では一旦 CPU 動作に戻し、Phase 10c 以降で次のいずれかを再検討する想定：
+- TF を `tensorflow[and-cuda]` に差し替えて TF CUDA 依存ライブラリを揃える（イメージサイズ +1〜2GB）
+- Crepe を別プロセスで実行して TF と PyTorch の CUDA 状態を分離する
 
 **コードの書き方:** リーダブルコードの考えに準拠する。
 
@@ -237,6 +243,28 @@ vocal-analyzer/
 ```
 ---
 ## ログ
+
+### 2026-05-28 Phase 10 準備：フロント分割・ドキュメント整理・シード・ロギング実装
+- `frontend/src/App.tsx`: 670行 → 9ファイル（最大187行）に分割
+  - `types.ts`（型定義・定数・ユーティリティ）/ `components/`（ScoreRing・TechniqueBar・LineChart）/ `screens/`（Auth・Upload・Result・Dashboard）
+- `CLAUDE.md` / `SPEC.md`: 重複整理
+  - 設計判断・既知の問題は CLAUDE.md に一元化、SPEC.md は製品仕様（機能要件・コア評価ロジック・データモデル）に特化
+- `backend/seed.py`: 新規追加
+  - テストユーザー2件 + サンプル分析5件（日付分散）を投入。冪等性あり
+- `backend/logging_config.py`: 新規追加・全モジュールに logger 仕込み
+  - INFO（ログイン成功・アップロード受信・タスク開始/完了）/ WARNING（ログイン失敗・ロックアウト・403・アップロード拒否）/ ERROR（タスク失敗）/ DEBUG（各分析段階の処理時間）
+  - `LOG_LEVEL` 環境変数で切り替え可能
+- `feature/phase10-prep` → `main` マージ済み
+
+### 2026-05-28〜29 Phase 10a: GPU化挑戦・見送り + Docker改善
+- `backend/requirements-nodeps.txt`: 新規追加・`crepe==0.0.13` を移動（Dockerfile 直書きを解消）
+- `docker-compose.yml`: 4サービス（db / redis / backend / celery_worker）に healthcheck 追加、`depends_on` を `condition: service_healthy` に変更
+- `docker-compose.yml`: 全6サービスにログローテーション設定（json-file driver・10MB × 3世代）。YAML アンカー `&default-logging` で重複排除
+- `backend/tests/test_api_analysis.py`: 既存バグ修正（`api.analysis.AsyncResult` → `api.analysis.celery_app.AsyncResult` にパッチ対象を変更）。Phase 9 でコード変更時にテスト追従漏れがあったものを発見
+- **GPU化見送り**: Demucs（PyTorch）の GPU 化は環境設定で動く想定だったが、Crepe（TensorFlow）の制約で諦め。詳細は「決定済みの仕様・注意事項」の「GPU 化見送り」参照
+  - 試行：`tf.config.set_visible_devices` / `CUDA_VISIBLE_DEVICES` env / `TF_XLA_FLAGS` — すべて効かず
+  - 最終的に separator.py・pitch.py・docker-compose.yml の GPU 関連変更を巻き戻し
+- #33（本番環境の接続情報管理）は次回セッションに持ち越し
 
 ### 2026-03-25 認証レビュー → 全対応済み（2026-03-26）
 - JWT保存: localStorage → httpOnly Cookie に変更済み

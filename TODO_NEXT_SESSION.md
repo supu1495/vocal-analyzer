@@ -1,28 +1,47 @@
 # 次回 Claude セッション用 引き継ぎドキュメント
 
-最終更新: 2026-05-28
+最終更新: 2026-05-29
 
 ---
 
 ## このセッションでやったこと
 
-### Phase 10 準備：4項目すべて完了
+### Phase 10 準備（マージ済み）
 
-| # | 項目 | 内容 |
+App.tsx 分割（#1）/ ドキュメント重複整理（#8）/ シードスクリプト（#31）/ ロギング実装（#13）の4項目すべて完了 → `feature/phase10-prep` を main にマージ。
+
+### Phase 10a: 部分完了
+
+| # | 項目 | 状態 |
 |---|---|---|
-| 1 | App.tsx 分割 | 670行 → `App.tsx`(96) + `types.ts`(38) + `components/`(3ファイル) + `screens/`(4ファイル)。最大ファイルでも 187 行 |
-| 8 | CLAUDE.md / SPEC.md 重複整理 | 設計判断・既知の問題は CLAUDE.md に一元化。SPEC.md は製品仕様（機能要件・設計方針・データモデル）に特化 |
-| 31 | テスト用シードスクリプト | `backend/seed.py` 追加。テストユーザー2件 + サンプル分析5件（日付分散）を投入。冪等性あり |
-| 13 | ロギング実装 | `backend/logging_config.py` 追加。全モジュールに logger 仕込み。INFO/WARNING/ERROR/DEBUG レベル分け。`LOG_LEVEL` 環境変数で切り替え可能 |
+| 4 | crepe を requirements に追加 | ✅ `requirements-nodeps.txt` を新設して移動 |
+| 5 | Docker healthcheck | ✅ 4サービス（db / redis / backend / celery_worker）に追加、起動順序を `service_healthy` に変更 |
+| 6 | Docker ログローテーション | ✅ 全6サービス（YAML アンカー `&default-logging` で重複排除） |
+| 36 | GPU化 | ❌ **見送り・巻き戻し**（詳細は後述） |
+| 33 | 本番環境の接続情報管理 | ⏳ 次回セッションに持ち越し |
 
-すべて Docker 環境で動作確認済み。
+### おまけ: テストバグ修正
+
+Phase 9 で `AsyncResult` → `celery_app.AsyncResult` に変えた際にテストが追従していなかった（`api.analysis.AsyncResult` をパッチしようとして AttributeError）。`api.analysis.celery_app.AsyncResult` をパッチするよう修正。37テスト全 pass。
+
+### GPU化見送りの経緯
+
+- 環境は OK だった（WSL2 で nvidia-smi OK・Container Toolkit インストール済み・PyTorch は `+cu121` ビルド）
+- docker-compose.yml に GPU 設定追加して `torch.cuda.is_available() == True` まで確認
+- しかし Crepe（TensorFlow）が GPU を検出すると XLA JIT で `libdevice` / `ptxas` を要求して失敗
+- TF を CPU 固定にする試み3つすべて失敗
+  - `tf.config.set_visible_devices([], "GPU")` → TF が import 時点で GPU 検出済み
+  - `CUDA_VISIBLE_DEVICES=-1` を import 前後で setup/restore → Celery fork で子プロセスが復元後の状態を継承
+  - `TF_XLA_FLAGS=--tf_xla_auto_jit=0` → Crepe 内部の `@tf.function` JIT は止められない
+- separator.py / pitch.py / docker-compose.yml の GPU 関連変更をすべて巻き戻して CPU 動作に戻した
+- 詳細は CLAUDE.md「決定済みの仕様・注意事項」の「GPU 化見送り」と LEARNING_LOG.md「PyTorch CUDA vs TensorFlow CUDA の違い」を参照
 
 ---
 
 ## 現在のブランチ状態
 
-- **作業ブランチ**: `feature/phase10-prep`（マージ待ち）
-- **main ブランチ**: Phase 9 + セキュリティ強化（feature/security-hardening）までマージ済み
+- **作業ブランチ**: `feature/phase10a-gpu`（マージ待ち）
+- **main ブランチ**: Phase 10 準備までマージ済み
 
 ---
 
@@ -198,30 +217,38 @@ DB層・認証層を触る作業をまとめた。
 
 ## 推奨される次回作業の進め方
 
-### Step 1: feature/phase10-prep を main にマージ
+### Step 1: feature/phase10a-gpu を main にマージ
 
 ```bash
 git checkout main
-git merge feature/phase10-prep
+git merge feature/phase10a-gpu
 ```
 
-### Step 2: Phase 10a（GPU化）のブランチを切る
+### Step 2: #33 を Phase 10a の締めとして実施（小さく終わらせる）
 
-```bash
-git checkout -b feature/phase10a-gpu
-```
+**現実的なスコープに修正**: 自宅 PC + CF Tunnel の構成では AWS Secrets Manager 等の本格ツールは過剰。以下の組み合わせを提案：
 
-### Step 3: Phase 10a の5項目を実施
+| 案 | 内容 |
+|---|---|
+| A | 起動時バリデーション（SECRET_KEY が `your-secret-key-here` のまま、POSTGRES_PASSWORD が `changeme` のままなら起動失敗） |
+| B | シークレット生成ヘルパースクリプト（`python scripts/gen_secrets.py` で雛形を出力） |
+| D | `.env.example` のドキュメント拡充（用途・ローテーション方法・生成方法） |
+
+C（Docker Secrets 化）は home PC では効果薄なので見送り。
+
+### Step 3: Phase 10b（精度確認 + 技法バグ修正）に進む
+
+GPU化は見送ったが Phase 10b は CPU で進められる。GPU 化は Phase 10c 以降で再挑戦するときの選択肢：
+- TF を `tensorflow[and-cuda]` に置き換え（イメージ +1〜2GB）
+- Crepe を別プロセスで実行して PyTorch と CUDA 状態を分離
 
 | # | 項目 |
 |---|---|
-| 36 | GPU化本体（WSL2 + NVIDIA Container Toolkit + CUDA PyTorch・htdemucs_ft 切り替え検討） |
-| 4 | crepe を requirements.txt に追加（現在 Dockerfile に直書き） |
-| 5 | Docker healthcheck 追加 |
-| 6 | Docker ログローテーション設定 |
-| 33 | 本番環境の接続情報管理（Secrets Manager） |
-
-ロギングが入ったので、GPU化前後で `[INFO] tasks: Task completed: ... elapsed=Xs` のログを比較して効果を測定可能。
+| 37 | 精度確認本体（実音声での閾値調整） |
+| 3 | `calculate_accuracy` の reference 引数整理（pitch.py:63） |
+| 14〜19 | 既知の技法検出バグ修正（しゃくり・フォール・こぶし・ビブラート） |
+| 34 | score_matrix / vocal_range のフロント表示 |
+| 28 | 分析進捗表示 |
 
 ---
 
