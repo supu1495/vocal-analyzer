@@ -3,6 +3,7 @@
 JWT生成・検証、パスワードハッシュ化を担当する
 """
 
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -14,6 +15,8 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import User
+
+logger = logging.getLogger(__name__)
 
 SECRET_KEY = os.environ["SECRET_KEY"]
 ALGORITHM = "HS256"
@@ -44,6 +47,7 @@ def check_lockout(email: str) -> None:
     """
     count = _redis.get(f"login_fail:{email}")
     if count and int(count) >= _MAX_FAILURES:
+        logger.warning("Lockout triggered: email=%s failure_count=%d", email, int(count))
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="ログイン試行回数が上限を超えました。15分後に再試行してください。",
@@ -81,7 +85,8 @@ def _decode_token(token: str) -> int:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = int(payload["sub"])
         return user_id
-    except (jwt.InvalidTokenError, KeyError, ValueError):
+    except (jwt.InvalidTokenError, KeyError, ValueError) as e:
+        logger.warning("JWT validation failed: %s", e)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="認証情報が無効です。再ログインしてください。",

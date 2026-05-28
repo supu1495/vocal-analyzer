@@ -1,9 +1,14 @@
+import logging
 import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.analysis import router as analysis_router
 from api.auth import router as auth_router
+from logging_config import setup_logging
+
+setup_logging()
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="vocal-analyzer API",
@@ -15,6 +20,7 @@ app = FastAPI(
 # 例: "http://localhost:5173,https://vocal-analyzer.supu361.dev"
 _cors_env = os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:5173")
 allowed_origins = [origin.strip() for origin in _cors_env.split(",") if origin.strip()]
+logger.info("Application starting. CORS allowed origins: %s", allowed_origins)
 
 app.add_middleware(
     CORSMiddleware,

@@ -3,9 +3,13 @@
 ユーザー登録・ログイン・プロフィール取得を担当する
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from auth_utils import (
     DUMMY_HASH,
@@ -59,10 +63,12 @@ def register(body: RegisterRequest, response: Response, db: Session = Depends(ge
     - password: パスワード（8文字以上推奨）
     """
     if len(body.password) < 8:
+        logger.info("Register rejected (weak password): email=%s", body.email)
         raise HTTPException(status_code=400, detail="パスワードは8文字以上で設定してください。")
 
     existing = db.query(User).filter(User.email == body.email).first()
     if existing:
+        logger.info("Register rejected (duplicate email): email=%s", body.email)
         raise HTTPException(status_code=409, detail="このメールアドレスはすでに登録されています。")
 
     user = User(
@@ -73,6 +79,7 @@ def register(body: RegisterRequest, response: Response, db: Session = Depends(ge
     db.add(user)
     db.commit()
     db.refresh(user)
+    logger.info("User registered: user_id=%d email=%s", user.id, user.email)
 
     token = create_access_token(user.id)
     response.set_cookie(
@@ -103,9 +110,11 @@ def login(body: LoginRequest, response: Response, db: Session = Depends(get_db))
 
     if not password_valid or user is None:
         record_login_failure(body.email)
+        logger.warning("Login failed: email=%s", body.email)
         raise HTTPException(status_code=401, detail="メールアドレスまたはパスワードが正しくありません。")
 
     clear_lockout(body.email)
+    logger.info("Login success: user_id=%d email=%s", user.id, user.email)
     token = create_access_token(user.id)
     response.set_cookie(
         key="access_token",

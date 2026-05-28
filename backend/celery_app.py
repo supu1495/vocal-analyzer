@@ -6,6 +6,10 @@ Redis をブローカー（タスクキュー）とバックエンド（結果�
 import os
 from celery import Celery
 
+from logging_config import setup_logging
+
+setup_logging()
+
 # auth_utils.py と同じパターンで REDIS_URL を取得する
 # ブローカー（タスクの受け渡し）: DB0
 # バックエンド（タスクの結果保存）: DB1 — ブローカーと混在しないよう別DBを使う

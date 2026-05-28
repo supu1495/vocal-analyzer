@@ -3,6 +3,9 @@
 separator・pitch・techniquesを組み合わせて分析結果を生成する
 """
 
+import logging
+import time
+
 import numpy as np  # 周波数配列のフィルタリングと最小・最大値計算に使用
 import librosa  # hz_to_midi・midi_to_note による周波数→ノート名変換に使用
 from librosa.onset import onset_detect  # 発声タイミング検出（librosa.onset.onset_detectの重複を避けるため個別import）
@@ -10,6 +13,8 @@ from librosa.onset import onset_detect  # 発声タイミング検出（librosa.
 from audio.separator import VocalSeparator
 from audio.pitch import PitchDetector
 from audio.techniques import TechniqueDetector
+
+logger = logging.getLogger(__name__)
 
 
 class AudioAnalyzer:
@@ -41,13 +46,19 @@ class AudioAnalyzer:
             }
         """
         # 音源分離：ボーカル・ドラム・ベース・その他に分離
+        t0 = time.time()
         separated_tracks = self.separator.separate(audio_path)
+        logger.debug("Separator finished: %.2fs", time.time() - t0)
 
         # ボーカルトラックからピッチを検出
+        t1 = time.time()
         pitch_data = self.pitch_detector.detect(separated_tracks["vocals"])
+        logger.debug("Pitch detection finished: %.2fs", time.time() - t1)
 
         # ピッチデータから歌唱技法を検出
+        t2 = time.time()
         detected_techniques = self.technique_detector.detect_all(pitch_data)
+        logger.debug("Technique detection finished: %.2fs", time.time() - t2)
 
         # 声域（最低音〜最高音）を計算
         vocal_range = self._calculate_vocal_range(pitch_data)

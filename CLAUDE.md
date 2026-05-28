@@ -60,78 +60,19 @@
 
 ## 完了済みフェーズ
 
-### Phase 1: Docker環境構築 ✅
-- 5サービス（frontend / backend / db / redis / nginx）起動確認済み
+| Phase | 内容 | テスト |
+|---|---|---|
+| 1 | Docker環境構築（5サービス） | — |
+| 2 | 音声分析エンジン（Crepe + librosa） | — |
+| 3 | フロントエンド3画面 | — |
+| 4 | DB連携（PostgreSQL + SQLAlchemy + Alembic） | — |
+| 5 | 認証（JWT httpOnly Cookie + Redis ロックアウト） | — |
+| 6 | バックエンドテスト（pytest） | 34テスト |
+| 7 | 音声分析エンジン本実装（技法検出 + スコアマトリクス） | 34テスト |
+| 8 | 非同期処理（Celery + Demucs v4） | 37テスト |
+| 9 | 本番デプロイ（CF Pages + CF Tunnel） | 37テスト |
 
-### Phase 2: 音声分析エンジン ✅
-- Crepeによるピッチ検出
-- librosaによる音響特徴抽出
-- 歌唱技法検出（ビブラート・こぶし・フォール・しゃくり・ロングトーン）※検出ロジック未実装（スタブ）、Phase 7で本実装予定
-- `POST /api/v1/analysis/upload` で 200 OK 確認済み
-
-### Phase 3: フロントエンド3画面実装 ✅
-- アップロード画面・分析結果画面・統計ダッシュボード画面
-
-### Phase 4: DB連携 ✅
-- `backend/database.py`: SQLAlchemy接続設定・`get_db()` DI関数
-- `backend/models.py`: `users` / `analysis_results` テーブル定義
-- `backend/alembic/`: マイグレーション設定・初回マイグレーション実行済み
-- `backend/api/analysis.py`: `analysis_store` dict → PostgreSQL保存に変更
-- `GET /api/v1/analysis/user/statistics` エンドポイント実装
-- フロントエンド: ダッシュボードのダミーデータ → 実API接続に変更
-
-### Phase 5: 認証（Authentication）✅
-- `backend/auth_utils.py`: JWT生成・検証、パスワードハッシュ化、Redisロックアウト
-- `backend/api/auth.py`: register / login / me / logout エンドポイント
-- JWT保存方式: httpOnly Cookie（XSS対策）
-- ログイン失敗ロックアウト: 5回失敗で15分ロック（Redis）
-- `backend/api/analysis.py`: `upload_audio` を認証必須に変更
-- Alembicマイグレーション: `users` テーブルに `hashed_password` カラム追加
-- フロントエンド: ログイン・登録画面追加、全APIに `credentials: 'include'` 付与
-
-### Phase 6: テスト ✅
-- `backend/tests/conftest.py`: SQLiteインメモリDB・fakeredis・TestClient の共通フィクスチャ
-- `backend/tests/test_auth_utils.py`: JWT・パスワード・ロックアウトのユニットテスト
-- `backend/tests/test_api_auth.py`: 認証APIエンドポイントのテスト（register / login / me / logout）
-- `backend/tests/test_api_analysis.py`: 分析APIエンドポイントのテスト（upload / get / statistics）
-- 34テスト全pass確認済み
-
-### Phase 7: 音声分析エンジン本実装 ✅
-- `backend/audio/techniques.py`: 歌唱技法検出を全実装（ビブラート・こぶし・フォール・しゃくり・ロングトーン）
-- `backend/audio/analyzer.py`: 声域計算・リズム評価・スコアマトリクス・ルールベースフィードバック生成を実装
-- `backend/models.py` + Alembicマイグレーション: `analysis_results` に4カラム追加（`total_score` / `faithfulness_score` / `technique_score` / `naturalness_penalty`）
-- 34テスト全pass確認済み
-
-### Phase 8: 非同期処理（Celery）・Demucs本番実装 ✅
-- `backend/celery_app.py`: Celeryアプリ設定（Broker: Redis DB0 / Backend: Redis DB1）
-- `backend/tasks.py`: `analyze_audio_task` Celeryタスク（分析実行・DB保存・一時ファイル削除）
-- `backend/audio/separator.py`: スタブ実装 → Demucs v4 による実装に変更
-- `backend/api/analysis.py`: 同期分析 → タスク登録（`.delay()`）方式に変更。`GET /status/{task_id}` エンドポイント追加
-- `backend/audio/analyzer.py`: `_calculate_rhythm_score` の死んだコード（else分岐）を削除
-- `docker-compose.yml`: `celery_worker` サービス追加・`vocal_uploads` 共有ボリューム追加
-- `backend/requirements.txt`: `celery==5.3.6` 追加
-- `backend/tests/test_api_analysis.py`: モック対象を `analyze_audio_task.delay` に変更・ステータス確認テスト3件追加
-- 37テスト全pass確認済み
-
-### Phase 9: 本番環境デプロイ ✅
-- **構成**: CF Pages（フロント）+ CF Tunnel（自宅PCへの橋渡し）+ Docker Compose（自宅PC）
-- **ドメイン**: `vocal-analyzer.supu361.dev`（フロント）/ `vocal-api.supu361.dev`（API）
-- `backend/main.py`: CORS 許可オリジンを `CORS_ALLOWED_ORIGINS` 環境変数化
-- `frontend/.env.production`: `VITE_API_BASE_URL=https://vocal-api.supu361.dev` を本番ビルドに埋め込み
-- `frontend/vite.config.ts`: ローカル開発用の proxy 設定（`/api/*` → `http://backend:8000`）
-- `backend/api/auth.py`: クロスドメイン Cookie のため `samesite="none"` に変更
-- `frontend/src/App.tsx`: 非同期分析のポーリング処理を実装（5秒間隔・最大120回 = 10分）
-- `frontend/src/App.tsx`: ロックアウト 429 受信時にログインボタンを 15分無効化する UI
-- `backend/audio/separator.py`: M4A→WAV 変換を ffmpeg で追加（torchaudio が M4A 非対応のため）
-- `backend/tasks.py`: PyTorch fork デッドロック回避のため AudioAnalyzer を遅延初期化
-- `backend/api/analysis.py`: アップロード時のサイズチェックをチャンクストリーミング化（DoS耐性）
-- `backend/api/analysis.py`: `AsyncResult` に `celery_app` を明示渡し（DisabledBackend バグ修正）
-- `backend/models.py` + マイグレーション: `analysis_results.user_id` を NOT NULL 化
-- `backend/tasks.py`: 例外時に `db.rollback()` を呼ぶ
-- `backend/Dockerfile`: `--reload` を本番デフォルトから削除（`docker-compose.override.yml` でローカルのみ復活）
-- `docker-compose.yml`: PostgreSQL `ports` をローカル開発専用 override に移動
-- `docker-compose.yml` + `.env.example`: `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` を環境変数化
-- `backend/requirements.txt`: `scipy==1.10.1` 固定（librosa 0.10.1 が `scipy.signal.hann` を使用しており scipy 1.11 以降で削除されたため）
+各フェーズの詳細な変更内容はページ下部の「ログ」セクションを参照。
 
 ---
 
@@ -169,6 +110,41 @@ crepeを `--no-deps` でインストールしてhmmlearnのpybind11競合を回�
 **user_id NOT NULL（Phase 9完了）:** Phase 5で認証を実装済み。Phase 9のAlembicマイグレーション（`6b8b9af3d05e`）で `analysis_results.user_id` を NOT NULL に変更済み。
 
 **声紋データ（voiceprint_data）:** 分析精度向上のため重要な機能として `users` テーブルに保持。認証実装後に声紋生成・比較機能を追加予定。
+
+---
+
+## 既知の問題・技術的負債
+
+| 問題 | 重大度 | 対応予定 |
+|---|---|---|
+| ロギング未実装 | 🟡 低 | Phase 10準備 |
+| `docker-compose.yml` に healthcheck 未設定 | 🟡 低 | Phase 10a |
+| しゃくり検出の `avg_height` 過小評価（ゆっくり上昇スタイル） | 🟡 低 | Phase 10b |
+| 200セント超の音程変化を未分類のまま除外している | 🟡 低 | Phase 10b |
+| 有声区間内のしゃくり（無声区間をはさまない滑り込み）を未検出 | 🟡 低 | Phase 10b |
+| 大振幅ビブラートがフレーズ末尾まで続く場合、フォールと誤検出する可能性 | 🟡 低 | Phase 10b |
+| フレーズ末尾で上昇して終わるこぶし（逆V字）を未検出 | 🟡 低 | Phase 10b |
+| ビブラートの「加点目的」と「アーティストのアレンジ模倣」を区別できない | 🟡 低 | Phase 13 |
+
+#### 補足
+
+**しゃくりの `avg_height` 過小評価：**  
+`_SHAKURI_SETTLE_FRAMES`（5フレーム）以内にゆっくり上昇するスタイル（藤井風のようなグルーヴ重視のアーティスト）では、安定音程の推定に上昇中のフレームが混入して `avg_height` が実際より小さく出る。検出の有無には影響しないが正確な幅の計測には改善が必要。
+
+**有声区間内のしゃくり：**  
+現在の実装は「無声（NaN）→ 有声」の切り替わり時のみしゃくりを検出する。母音が連続するメリスマや有声子音（n, r など）が続くフレーズでは NaN が生まれないため、その区間内のしゃくりを取りこぼす。有声区間内の「ピッチ下降 → 上昇パターン」を検出するにはピッチのスムージングが必要で、実音声によるパラメータ調整が先決のため現段階では対応しない。
+
+**ビブラートの意図識別不能：**  
+「旋律のない区間でのビブラート」を減点したい一方で、アーティストのビブラートスタイルを模倣した表現は加点したい。しかし、「採点目的の加点行為」と「意図的なアレンジ模倣」は音声データだけでは区別できない。どこにビブラートをかけるべきかという文脈判断には楽曲のリファレンスデータが必要なため、現フェーズでは `detect_vibrato` の返り値から `gratuitous_count` フィールドを除外している。将来的にはLLMフィードバックやリファレンス楽曲との比較で対応する。
+
+**フレーズ末尾の上昇こぶし未検出：**  
+`detect_kobushi` はこぶしの「ベースラインへの戻り」を確認するために逸脱区間の後にフレームが必要なため、有声区間の末尾に達した逸脱はスキップしている。下降方向の末尾逸脱は `detect_fall` が担当するが、上昇方向（逆V字）の末尾こぶしはいずれにも検出されない。対応方針として、逸脱が上昇方向かつ有声区間の末尾に達した場合は「戻り確認なしのこぶし候補」として低信頼度フラグ付きで記録する、または隣接する有声区間の開始ピッチをもって「戻り」とみなす方法が考えられる。
+
+**大振幅ビブラートのフレーズ末尾でのフォール誤検出：**  
+フォール検出は「有声 → 無声（NaN）への切り替わり直前の単調下降区間」を対象にしている。ビブラートが大きな振幅（±100cent以上）でフレーズ末尾まで続いた場合、最後の下降半周期（約60ms・100cent程度）が深さ・時間・速度の全フィルタを通過してフォールとして誤検出される可能性がある。単調性ウォークにより拾う区間を1サイクル分に絞っているため影響は限定的。根本解決はビブラート検出（`detect_vibrato`）の実装後に「ビブラート区間をフォール検出から除外する」後処理を加えることで対応する。
+
+**200セント超の音程変化：**  
+`_SHAKURI_MAX_CENTS = 200.0` を超える上昇をしゃくりから除外しているが、原因は複数考えられる。体力が続かず音程をキープできていないケース、感情的な荒々しさや意図的な崩しの表現である可能性もある。現段階では未分類のまま除外しており、将来は「感情表現強度」の別指標として検出できると望ましい。
 
 ---
 
@@ -247,7 +223,17 @@ vocal-analyzer/
     ├── .env.production              # 本番ビルドで埋め込む VITE_API_BASE_URL
     ├── vite.config.ts               # ローカル開発用の /api/* proxy 設定
     └── src/
-        └── App.tsx                  # 全画面のReactコンポーネント
+        ├── App.tsx                  # ルーティング・認証状態管理・ヘッダー
+        ├── types.ts                 # 型定義・定数・ユーティリティ
+        ├── components/
+        │   ├── ScoreRing.tsx        # スコアリング表示
+        │   ├── TechniqueBar.tsx     # 技法バー
+        │   └── LineChart.tsx        # 折れ線グラフ
+        └── screens/
+            ├── AuthScreen.tsx       # ログイン / 登録
+            ├── UploadScreen.tsx     # アップロード + ポーリング
+            ├── ResultScreen.tsx     # 分析結果表示
+            └── DashboardScreen.tsx  # 統計ダッシュボード
 ```
 ---
 ## ログ

@@ -3,6 +3,7 @@
 音声ファイルのアップロード・分析結果の取得・統計情報の取得を担当する
 """
 
+import logging
 import os
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
@@ -13,6 +14,8 @@ from tasks import analyze_audio_task
 from auth_utils import get_current_user
 from database import get_db
 from models import AnalysisResult, User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/analysis", tags=["analysis"])
 
@@ -41,9 +44,15 @@ async def upload_audio(
     """
     _validate_audio_content_type(audio_file)
 
+    logger.info(
+        "Upload received: user_id=%d filename=%s content_type=%s",
+        current_user.id, audio_file.filename, audio_file.content_type,
+    )
+
     tmp_path = await _stream_to_shared_volume(audio_file)
 
     task = analyze_audio_task.delay(tmp_path, song_title, artist_name, current_user.id)
+    logger.info("Task queued: task_id=%s user_id=%d", task.id, current_user.id)
 
     return {
         "task_id": task.id,
@@ -127,6 +136,10 @@ def get_analysis(
     if result is None:
         raise HTTPException(status_code=404, detail="分析結果が見つかりません。")
     if result.user_id != current_user.id:
+        logger.warning(
+            "Forbidden access attempt: requester_id=%d analysis_id=%d owner_id=%d",
+            current_user.id, analysis_id, result.user_id,
+        )
         raise HTTPException(status_code=403, detail="この分析結果へのアクセス権限がありません。")
 
     return {
@@ -156,6 +169,10 @@ def _validate_audio_content_type(audio_file: UploadFile) -> None:
     """ブラウザ側の Content-Type で1次フィルタする（偽装可能なため後段の magic bytes 検証と併用する）"""
     allowed_types = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/x-m4a"]
     if audio_file.content_type not in allowed_types:
+        logger.warning(
+            "Upload rejected (invalid content-type): filename=%s content_type=%s",
+            audio_file.filename, audio_file.content_type,
+        )
         raise HTTPException(
             status_code=400,
             detail="対応していないファイル形式です。WAV/MP3/M4Aのみ対応しています。",
@@ -169,6 +186,7 @@ def _validate_audio_magic_bytes(head: bytes) -> None:
     から判別する。WAV/MP3/M4A 以外は拒否する。
     """
     if len(head) < 12:
+        logger.warning("Upload rejected (file too small): bytes=%d", len(head))
         raise HTTPException(status_code=400, detail="ファイルが破損しているか小さすぎます。")
 
     # WAV: "RIFF" + サイズ(4byte) + "WAVE"
@@ -184,6 +202,7 @@ def _validate_audio_magic_bytes(head: bytes) -> None:
     if head[4:8] == b"ftyp":
         return
 
+    logger.warning("Upload rejected (magic bytes mismatch)")
     raise HTTPException(
         status_code=400,
         detail="ファイル内容が WAV/MP3/M4A のいずれにも一致しません。",
@@ -214,6 +233,10 @@ async def _stream_to_shared_volume(audio_file: UploadFile) -> str:
                     first_chunk = False
                 total += len(chunk)
                 if total > _MAX_FILE_SIZE:
+                    logger.warning(
+                        "Upload rejected (size exceeded): bytes=%d limit=%d",
+                        total, _MAX_FILE_SIZE,
+                    )
                     raise HTTPException(
                         status_code=400,
                         detail="ファイルサイズが大きすぎます。50MB以下にしてください。",
