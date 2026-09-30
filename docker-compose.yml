@@ -51,5 +51,12 @@ services:
       - frontend
       - backend
 
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    restart: unless-stopped
+    depends_on:
+      - backend
+
 volumes:
   postgres_data:

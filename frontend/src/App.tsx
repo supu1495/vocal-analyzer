@@ -227,6 +227,29 @@ function AuthScreen({
 // =====================
 // 画面1: アップロード
 // =====================
+// 分析はCPUで数分かかるため、完了するまで結果取得APIを一定間隔で叩く
+const POLL_INTERVAL_MS = 3000
+const POLL_TIMEOUT_MS = 15 * 60 * 1000
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function waitForAnalysis(analysisId: number): Promise<AnalysisResult> {
+  const deadline = Date.now() + POLL_TIMEOUT_MS
+
+  while (Date.now() < deadline) {
+    await sleep(POLL_INTERVAL_MS)
+
+    const res = await fetch(`/api/v1/analysis/${analysisId}`, { credentials: 'include' })
+    if (!res.ok) throw new Error(`サーバーエラー: ${res.status}`)
+
+    const data: AnalysisResult & { error?: string } = await res.json()
+    if (data.status === 'completed') return data
+    if (data.status === 'failed') throw new Error(data.error || '分析に失敗しました')
+  }
+
+  throw new Error('分析がタイムアウトしました。時間をおいて統計画面をご確認ください。')
+}
+
 function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
   const [dragging, setDragging] = useState(false)
   const [file, setFile] = useState<File | null>(null)
@@ -255,7 +278,10 @@ function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
       const url = `/api/v1/analysis/upload?song_title=${encodeURIComponent(songTitle)}&artist_name=${encodeURIComponent(artistName)}`
       const res = await fetch(url, { method: 'POST', credentials: 'include', body: form })
       if (!res.ok) throw new Error(`サーバーエラー: ${res.status}`)
-      const data: AnalysisResult = await res.json()
+
+      // アップロードは分析の完了を待たずに202とIDだけを返すので、完了までポーリングする
+      const { analysis_id } = await res.json()
+      const data = await waitForAnalysis(analysis_id)
       onResult({ ...data, song_title: songTitle, artist_name: artistName })
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : '分析に失敗しました')
@@ -327,7 +353,7 @@ function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
         color: file && !loading ? 'white' : '#444', fontSize: '16px', fontWeight: '700',
         cursor: file && !loading ? 'pointer' : 'not-allowed', transition: 'all 0.2s ease', letterSpacing: '0.05em',
       }}>
-        {loading ? '分析中...' : '分析を開始する →'}
+        {loading ? '分析中... (数分かかります)' : '分析を開始する →'}
       </button>
     </div>
   )

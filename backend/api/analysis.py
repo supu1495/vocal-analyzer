@@ -3,24 +3,40 @@
 音声ファイルのアップロード・分析結果の取得・統計情報の取得を担当する
 """
 
+import logging
 import os
 import tempfile
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+
+import redis
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
 from audio.analyzer import AudioAnalyzer
 from auth_utils import get_current_user
-from database import get_db
+from database import SessionLocal, get_db
 from models import AnalysisResult, User
 
 router = APIRouter(prefix="/api/v1/analysis", tags=["analysis"])
 
+logger = logging.getLogger(__name__)
+
 # アプリ起動時に1回だけインスタンス化（Demucsモデルのロードが重いため）
 audio_analyzer = AudioAnalyzer()
 
+# 分析の進行状況はRedisに持つ（DBスキーマを変えずに状態を扱うための暫定対応）
+_redis = redis.from_url(os.environ.get("REDIS_URL", "redis://redis:6379"))
+_STATUS_TTL_SECONDS = 24 * 60 * 60
 
-@router.post("/upload")
+STATUS_PROCESSING = "processing"
+STATUS_COMPLETED = "completed"
+STATUS_FAILED = "failed"
+
+_FAILURE_MESSAGE = "音声の分析に失敗しました。ファイルが壊れていないかご確認ください。"
+
+
+@router.post("/upload", status_code=202)
 async def upload_audio(
+    background_tasks: BackgroundTasks,
     audio_file: UploadFile = File(...),
     song_title: str = "",
     artist_name: str = "",
@@ -28,7 +44,11 @@ async def upload_audio(
     current_user: User = Depends(get_current_user),
 ):
     """
-    音声ファイルをアップロードして分析し、結果をDBに保存する
+    音声ファイルを受け取り、分析をバックグラウンドで開始する
+
+    CPUでの分析は数分かかりリバースプロキシのタイムアウトに引っかかるため、
+    ここでは結果を待たずに202を返す。
+    呼び出し側は GET /api/v1/analysis/{analysis_id} をポーリングして完了を待つ。
 
     - audio_file: 音声ファイル（WAV/MP3/M4A）
     - song_title: 楽曲名（任意）
@@ -39,15 +59,19 @@ async def upload_audio(
     content = await audio_file.read()
     _validate_file_size(content)
 
-    analysis_data = _run_analysis(audio_file.filename, content, song_title, artist_name)
+    pending = _create_pending_record(db, song_title, artist_name, current_user.id)
+    _write_status(pending.id, STATUS_PROCESSING)
 
-    saved = _save_to_db(db, song_title, artist_name, analysis_data, current_user.id)
+    background_tasks.add_task(
+        _analyze_and_save,
+        pending.id,
+        audio_file.filename,
+        content,
+        song_title,
+        artist_name,
+    )
 
-    return {
-        "analysis_id": saved.id,
-        "status": "completed",
-        "result": analysis_data,
-    }
+    return {"analysis_id": pending.id, "status": STATUS_PROCESSING}
 
 
 @router.get("/user/statistics")
@@ -59,10 +83,12 @@ def get_user_statistics(
     ログインユーザーの分析結果統計を返す
 
     ダッシュボード画面のグラフ・サマリー表示に使用する
+    分析中・失敗したレコードはスコアが未確定なので集計から除外する
     """
     results = (
         db.query(AnalysisResult)
         .filter(AnalysisResult.user_id == current_user.id)
+        .filter(AnalysisResult.pitch_accuracy.isnot(None))
         .order_by(AnalysisResult.created_at.asc())
         .all()
     )
@@ -94,10 +120,11 @@ def get_analysis(
     current_user: User = Depends(get_current_user),
 ):
     """
-    指定IDの分析結果を取得する
+    指定IDの分析結果と進行状況を取得する
 
     - analysis_id: アップロード時に返されたID
     - ログインユーザー自身の分析結果のみ取得可能
+    - status が processing の間は result の各値が未確定（None）
     """
     result = db.query(AnalysisResult).filter(AnalysisResult.id == analysis_id).first()
     if result is None:
@@ -105,8 +132,12 @@ def get_analysis(
     if result.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="この分析結果へのアクセス権限がありません。")
 
+    status, error_detail = _read_status(result)
+
     return {
         "analysis_id": result.id,
+        "status": status,
+        "error": error_detail,
         "song_title": result.song_title,
         "artist_name": result.artist_name,
         "result": {
@@ -119,7 +150,58 @@ def get_analysis(
     }
 
 
+# ── 進行状況の管理 ────────────────────────────────────────────────────────────
+
+
+def _status_key(analysis_id: int) -> str:
+    return f"analysis_status:{analysis_id}"
+
+
+def _write_status(analysis_id: int, status: str, detail: str = "") -> None:
+    """進行状況をRedisに記録する（一定時間で自動的に消える）"""
+    value = f"{status}:{detail}" if detail else status
+    _redis.setex(_status_key(analysis_id), _STATUS_TTL_SECONDS, value)
+
+
+def _read_status(record: AnalysisResult) -> tuple[str, str]:
+    """
+    進行状況とエラー内容を返す
+
+    RedisのキーがTTLで消えている場合は、DBに結果が入っているかで完了を判定する
+    """
+    raw = _redis.get(_status_key(record.id))
+    if raw is None:
+        has_result = record.pitch_accuracy is not None
+        return (STATUS_COMPLETED if has_result else STATUS_FAILED), ""
+
+    status, _, detail = raw.decode().partition(":")
+    return status, detail
+
+
 # ── プライベート関数 ──────────────────────────────────────────────────────────
+
+
+def _analyze_and_save(
+    analysis_id: int, filename: str, content: bytes, song_title: str, artist_name: str
+) -> None:
+    """
+    バックグラウンドで分析を実行し、作成済みのレコードに結果を書き込む
+
+    リクエスト用のDBセッションはレスポンス返却時に閉じられるため、
+    ここでは新しいセッションを作って使う
+    """
+    db = SessionLocal()
+    try:
+        analysis_data = _run_analysis(filename, content, song_title, artist_name)
+        _fill_result(db, analysis_id, analysis_data)
+        _write_status(analysis_id, STATUS_COMPLETED)
+    except Exception:
+        db.rollback()
+        # 例外の詳細はログにだけ残し、利用者には内部情報を返さない
+        logger.exception("分析に失敗しました: analysis_id=%s", analysis_id)
+        _write_status(analysis_id, STATUS_FAILED, _FAILURE_MESSAGE)
+    finally:
+        db.close()
 
 
 def _validate_audio_file(audio_file: UploadFile) -> None:
@@ -163,24 +245,34 @@ def _run_analysis(
         os.unlink(tmp_path)
 
 
-def _save_to_db(
-    db: Session, song_title: str, artist_name: str, analysis_data: dict, user_id: int
+def _create_pending_record(
+    db: Session, song_title: str, artist_name: str, user_id: int
 ) -> AnalysisResult:
-    """分析結果をPostgreSQLに保存してcommitする"""
+    """分析開始前の空レコードを作成する（スコア類は分析完了後に埋める）"""
     record = AnalysisResult(
         user_id=user_id,
         song_title=song_title,
         artist_name=artist_name,
-        pitch_accuracy=analysis_data.get("pitch_accuracy"),
-        rhythm_score=analysis_data.get("rhythm_score"),
-        techniques=analysis_data.get("techniques"),
-        vocal_range=analysis_data.get("vocal_range"),
-        feedback=analysis_data.get("feedback"),
     )
     db.add(record)
     db.commit()
     db.refresh(record)
     return record
+
+
+def _fill_result(db: Session, analysis_id: int, analysis_data: dict) -> None:
+    """分析完了後のスコアを既存レコードに書き込んでcommitする"""
+    record = db.query(AnalysisResult).filter(AnalysisResult.id == analysis_id).first()
+    if record is None:
+        logger.error("保存先のレコードが見つかりません: analysis_id=%s", analysis_id)
+        return
+
+    record.pitch_accuracy = analysis_data.get("pitch_accuracy")
+    record.rhythm_score = analysis_data.get("rhythm_score")
+    record.techniques = analysis_data.get("techniques")
+    record.vocal_range = analysis_data.get("vocal_range")
+    record.feedback = analysis_data.get("feedback")
+    db.commit()
 
 
 def _calculate_growth_rate(pitch_values: list[float]) -> int:
