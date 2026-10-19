@@ -106,6 +106,14 @@ services:
       - backend
     logging: *default-logging
 
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    logging: *default-logging
+
 volumes:
   postgres_data:
   vocal_uploads:
