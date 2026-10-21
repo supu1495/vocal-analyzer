@@ -10,7 +10,7 @@ services:
     build:
       context: ./frontend
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -22,7 +22,7 @@ services:
     build:
       context: ./backend
     ports:
-      - "8080:8000"
+      - "127.0.0.1:8080:8000"
     volumes:
       - ./backend:/app
       - vocal_uploads:/tmp/vocal_analyzer
@@ -86,8 +86,6 @@ services:
 
   redis:
     image: redis:7
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -98,7 +96,7 @@ services:
   nginx:
     image: nginx:alpine
     ports:
-      - "80:80"
+      - "127.0.0.1:80:80"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
     depends_on:
