@@ -4440,3 +4440,120 @@ def _get_analyzer() -> AudioAnalyzer:
 - **C** Crepe を別プロセスで実行して TF と PyTorch の CUDA 状態を分離
 
 Phase 10c 以降で B または C を検討する。
+
+---
+
+## Docker のポート公開範囲を 127.0.0.1 に限定する（issue #28）
+
+`docker-compose.yml` の `ports: "6379:6379"` は、書き方を省略すると `0.0.0.0:6379` として公開される。`0.0.0.0` は「このPCが持つ全部のネットワークの入口」という意味で、同じネットワークの他の端末からもつなげる状態になる。Redis はパスワードなしで、ログイン失敗回数（ロックアウト）と Celery のタスクキューが入っているため、外から読み書きされるとロックアウトの解除やタスクの改ざんができてしまう。
+
+`"127.0.0.1:8080:8000"` のように先頭にホスト側の IP を書くと、そのアドレスでだけ待ち受ける。`127.0.0.1` は自分自身を指すアドレスなので、このPCの中（ブラウザ・curl）からしかつなげなくなる。`docker ps` の PORTS 欄で `0.0.0.0:` か `127.0.0.1:` かを見れば、今どちらで公開されているかを確認できる。
+
+Redis はホストから使う必要がないので `ports` 自体を削除した。backend や celery_worker は Docker Compose が作る内部ネットワーク上で `redis://redis:6379`（サービス名がそのままホスト名になる）でつないでいるため、`ports` がなくても通信できる。`ports` は「ホストからコンテナへの入口」を作る設定で、コンテナ同士の通信には関係ない。
+
+### ports の3つの書き方
+
+| 書き方 | 意味 | 誰がつなげるか |
+|---|---|---|
+| `"6379:6379"` | PC の 6379 番に来た通信をコンテナに渡す（`0.0.0.0` 扱い） | 同じ Wi-Fi の他の端末からも（今回の問題） |
+| `"127.0.0.1:6379:6379"` | 同じ通信を、PC 自身から来たものだけ受け付ける | この PC の中からだけ |
+| `ports` なし | PC 側に入口を作らない | PC からはつながらない。コンテナ同士は内部ネットワークでつながる |
+
+### docker-compose.yml と docker-compose.override.yml の役割
+
+`docker-compose.yml` は git で管理していて、本番・開発共通の設定。ここから redis の `ports` を消したので、この設定だけで起動すると Redis は PC の外からも中からも見えない。
+
+`docker-compose.override.yml` は git の管理外で、この PC 専用の追加設定。`docker compose up` のときに自動で `docker-compose.yml` の上に重ねられる。ここに db と redis の `127.0.0.1:` 付きの `ports` を書いたので、自分の PC からは psql や redis-cli で中身を見られて、他の端末からは見えない、という状態になる。
+
+要するに、本番用の設定では Redis と DB を外から見えなくし、開発中に自分で中身を見たいときのために、手元用の設定ファイルでこの PC の中からだけ見えるように開け直している。
+
+なお、本番も同じ自宅 PC で動いているので、この override は本番として起動するときにも効く。ただし `127.0.0.1` 限定なので、外から見えないことに変わりはない。
+
+### 全体像を家にたとえる
+
+自宅 PC を1軒の家とすると、次のように対応する。
+
+| たとえ | 実際のもの |
+|---|---|
+| 家 | 自宅 PC |
+| 部屋 | コンテナ（backend・redis・db・cloudflared など） |
+| 部屋どうしをつなぐ廊下 | Docker Compose の内部ネットワーク（`redis://redis:6379` のようにサービス名でつなぐ） |
+| 玄関に並んだ扉の番号 | ポート番号（6379・5432・8080 など） |
+| どの扉から来た人をどの部屋に通すかの決まり | `ports:` の設定 |
+| 道路に面した扉 | `"6379:6379"`（同じ Wi-Fi にいる人なら誰でもノックできる） |
+| 家の中からしか開けられない扉 | `"127.0.0.1:6379:6379"` |
+| 扉がない | `ports` なし（廊下だけでつながる） |
+
+redis の部屋にはカギ（パスワード）がなく、中にログイン失敗の回数と、分析タスクの順番待ちリスト（Celery のキュー）が置いてある。道路側の扉から入れると、失敗回数を0に戻してロックアウトを解除したり、タスクを書き換えたりできてしまう。これが今回直した問題。
+
+扉を閉じても本番が動くのは、Cloudflare Tunnel（cloudflared）も家の中の部屋の1つだから。外のユーザーからのリクエストは「Cloudflare → cloudflared の部屋 → 廊下 → backend の部屋」と届き、玄関の扉（ホストの 8080 番）は通らない。cloudflared のログで接続先が `http://backend:8000`（サービス名＝廊下経由）になっていたことが、この根拠。
+
+今回の作業をこのたとえで言うと、ステップ1（`docker-compose.yml`）で redis の道路側の扉を撤去し、backend・frontend・nginx の扉を「家の中からだけ」に変えた。ステップ2（override）で、自分が中身を見たいときのために、db と redis に「家の中からだけ」の扉を付けた。
+
+### Docker の公開ポートはファイアウォールを通らないことがある
+
+Docker はポートを公開するとき、iptables（Linux のパケット転送ルール）に自分でルールを書き込む。このルールは ufw が管理するルールより先に処理されるため、ufw で 6379 を拒否していても、Docker が公開したポートには外からつながってしまうことがある（Docker 公式ドキュメント「Packet filtering and firewalls」に記載）。なので「ファイアウォールで守る」より「そもそも公開しない／127.0.0.1 に限定する」方が確実。
+
+### Cloudflare Tunnel はどこに接続しているか
+
+トークン方式（`tunnel run --token ...`）の cloudflared は、接続先（ingress）を Cloudflare のダッシュボード側で管理していて、コードやファイルには書かれていない。起動時にダッシュボードから設定が配られ、そのときの内容が cloudflared コンテナのログに `Updated to new configuration` として出る。今回は `"service":"http://backend:8000"` となっており、cloudflared コンテナが内部ネットワーク経由で backend コンテナに直接つないでいることがわかった。ホストの 8080 番は通らないので、backend を `127.0.0.1:8080` に限定しても本番には影響しない。
+
+`~/.cloudflared/config.yml` には `http://localhost:8080` と書いてあるが、これはホストに cloudflared を直接インストールして動かしていた頃の設定で、今はどのプロセスも使っていない。
+
+### override の ports は追加される
+
+`docker-compose.override.yml` に書いた `ports` は、`docker-compose.yml` 側の `ports` を置き換えるのではなく、リストに追加される形でマージされる。そのため、本番用の `docker-compose.yml` からは redis の `ports` を消し、ローカルで redis-cli を使いたいときだけ override に `127.0.0.1:6379:6379` を書く、という分け方ができる。マージ後の最終的な設定は `docker compose config` で確認できる（読み取りだけでコンテナの状態は変わらない）。ポートの変更は、`docker compose up -d` でコンテナを作り直したときに反映される。
+
+### WSL2 の NAT モードと LAN からの到達性
+
+この PC は WSL2 の NAT モード（`wslinfo --networking-mode` で確認）で動いている。NAT モードでは WSL は Windows とは別の内部ネットワーク（今回は `172.25.x.x`）に置かれ、LAN の他の端末から届くのは Windows の IP（`192.168.11.6`）だけになる。Windows 側でポート転送（`netsh interface portproxy`）を設定していなければ、LAN から WSL の中のポートには届かない。そのため、変更前から実際にはスマホから Redis に届いていなかった可能性が高い。それでも 127.0.0.1 に限定しておけば、将来ミラーモードに切り替えたりポート転送を設定したりしても Redis が LAN に出ることはない。
+
+**疑問と回答:**
+- Q: スマホからどうやって確認すればいい？
+- A: PC と同じ Wi-Fi につないで、ブラウザで `http://192.168.11.6:8080/health` を開き、`{"status":"ok"}` が出なければ backend は閉じている。Redis は HTTP ではないのでブラウザでは確認できず、Android なら Termux で `redis-cli -h 192.168.11.6 ping` を実行して `PONG` が返らないことを見る
+
+---
+
+## 秘密情報の管理と起動時チェック（issue #41）
+
+これまでは `.env` の `SECRET_KEY` や `POSTGRES_PASSWORD` が `.env.example` の初期値（`your-secret-key-here`・`changeme`）のままでも、気づかずに起動できてしまっていた。そこで `backend/secret_check.py` を作り、初期値のまま・空・短すぎる（`SECRET_KEY` は32文字未満、パスワードは16文字未満）場合は、backend と celery_worker が理由をログに出して起動を止めるようにした。あわせて、値を生成する `scripts/gen_secrets.py` を作り、Redis にも `requirepass` でパスワードを設定した。
+
+### .env の値はどこまでコンテナに届くか
+
+`.env` の値は、Docker Compose が `docker-compose.yml` の `${...}` に埋め込むために使うもので、コンテナの中に届くのは `environment` に書いた変数だけ。backend の `environment` には組み立て済みの `DATABASE_URL` と `REDIS_URL` しか書いていないので、backend の中には `POSTGRES_PASSWORD` や `REDIS_PASSWORD` という名前の変数は存在しない。そのため `secret_check.py` では、`DATABASE_URL` からは SQLAlchemy の `make_url`、`REDIS_URL` からは標準ライブラリの `urlparse` でパスワード部分を取り出して調べている。
+
+### 接続 URL のパスワードに入れてはいけない文字
+
+`postgresql://ユーザー:パスワード@ホスト:ポート/DB名` のような接続 URL は、`:` `@` `/` を区切りとして読む。パスワードにこれらの文字が入ると、どこまでがパスワードなのかが読み取れなくなる。実際に `redis://:pa/ss@redis:6379` を `urlparse` に通すと、パスワードは `None`（取れない）になった。`openssl rand -base64 32` の出力には `/` `+` `=` が含まれることがあるので、URL に埋め込む値には向かない。`gen_secrets.py` では、0-9 と a-f だけで値を作る `secrets.token_hex` を使っている。
+
+### SECRET_KEY の役割と、差し替えたときに起きること
+
+JWT（ログインの通行証）は、中身（誰がログインしたか・有効期限）に `SECRET_KEY` で署名（ハンコ）をしたもの。backend は受け取った JWT のハンコを同じ鍵で確かめ、合えば本物とみなす。つまり鍵を知っている人は、本物と同じハンコを押した通行証を自分で作れる。初期値の `your-secret-key-here` は公開リポジトリの `.env.example` に書いてあり誰でも見られるので、初期値のままだと、好きなユーザーとしてログインした通行証を偽造されてしまう。
+
+鍵を差し替えると、古い鍵で押したハンコは新しい鍵では合わなくなるので、それまでに発行した通行証は全部無効になり、ログイン中の全員がログアウトされる。今回は作業中に `SECRET_KEY` の値が画面に出たため差し替えた。差し替え後、本番のブラウザを再読み込みするとログイン画面に戻ったことで、漏れた鍵がもう使えないことを確かめた。
+
+### POSTGRES_PASSWORD が使われるのは初回だけ
+
+postgres の公式イメージは、データ領域（`postgres_data` volume）が空のとき、つまり初めて起動したときだけ DB を初期化し、そのときに `POSTGRES_PASSWORD` をパスワードとして設定する。2回目以降の起動では `POSTGRES_PASSWORD` を読まないので、`.env` を書き換えても DB のパスワードは変わらない。その状態で起動すると、backend だけが新しいパスワードで接続しようとして失敗する。
+
+後からパスワードを変えるには、先に DB 側を `ALTER USER`（psql の `\password`）で変えてから `.env` を書き換える。`\password` はパスワードを対話で聞いてくるので、値がコマンド履歴に残らない。手順は `.env.example` に書いたが、まだ実際には試していない。
+
+### docker compose config は秘密情報を全部表示する
+
+`docker compose config` は、`.env` の値を `${...}` に埋め込んだ後の設定をそのまま表示するので、パスワードやトークンも画面に出る。今回は `grep -A3` で Redis の行を探したとき、その後ろの行に `SECRET_KEY` があり、値が画面に出てしまった。秘密情報を含む出力を確認するときは、値を伏せ字にするか、`[ -n "$VAR" ] && echo set` のように「空でないか」だけを見る。
+
+---
+
+## issue #28・#41 の作業中に出会ったこと
+
+### WSL のコンテナがホストのファイルを見失う
+
+Docker Desktop + WSL の環境では、ホストのファイルやフォルダを取り込んで（マウントして）いるコンテナが、古い状態のまま壊れることがある。今回は nginx の `default.conf` と frontend の `package.json` がコンテナの中から見えなくなった。`docker compose up -d --force-recreate <サービス名>` でそのコンテナを作り直すと直った。原因までは調べていない。
+
+### .env に echo で追記する前に、末尾の改行を確認する
+
+`echo "REDIS_PASSWORD=..." >> .env` は、`.env` の最後に文字を書き足すだけ。最後の行が改行で終わっていないと、書き足した内容が前の行の続きにくっつき、`CORS_ALLOWED_ORIGINS=http://localhost:5173REDIS_PASSWORD=...` のような1行になってしまう。追記する前に `tail -c1 .env | xxd` で最後の1バイトを16進数で表示し、`0a`（改行）になっていることを確認する。
+
+### redis-cli にパスワードを渡す REDISCLI_AUTH
+
+`redis-cli -a パスワード` でもパスワードを渡せるが、コマンドラインにパスワードを書くのは安全でないという警告が出る。`REDISCLI_AUTH` 環境変数に入れておくと、redis-cli はそこからパスワードを読むので警告が出ない。redis コンテナの `environment` に `REDISCLI_AUTH` を渡しておいたので、healthcheck の `redis-cli ping` は書き換えずにそのまま通る。パスワードなしで弾かれることは、`docker compose exec -e REDISCLI_AUTH= redis redis-cli ping` のように空で上書きして確かめた。
