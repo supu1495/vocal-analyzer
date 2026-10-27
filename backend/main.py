@@ -1,13 +1,18 @@
 import logging
 import os
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from api.analysis import router as analysis_router
-from api.auth import router as auth_router
 from logging_config import setup_logging
+from secret_check import validate_secrets
 
+# ルーターを import すると auth_utils が SECRET_KEY を読むため、その前にチェックする
 setup_logging()
+validate_secrets()
+
+from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from api.analysis import router as analysis_router  # noqa: E402
+from api.auth import router as auth_router  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(

@@ -7,8 +7,10 @@ import os
 from celery import Celery
 
 from logging_config import setup_logging
+from secret_check import validate_secrets
 
 setup_logging()
+validate_secrets()
 
 # auth_utils.py と同じパターンで REDIS_URL を取得する
 # ブローカー（タスクの受け渡し）: DB0

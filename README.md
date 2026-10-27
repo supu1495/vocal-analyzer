@@ -64,12 +64,13 @@
 git clone https://github.com/supu1495/vocal-analyzer.git
 cd vocal-analyzer
 
-# 2. 環境変数ファイルを作成
-cp .env.example .env
+# 2. 環境変数ファイルを作成（秘密情報はランダムな値で埋まる）
+python3 scripts/gen_secrets.py > .env
 # .env を編集して以下を設定してください
-#   - SECRET_KEY: openssl rand -base64 32 などで生成した強い秘密鍵
-#   - POSTGRES_PASSWORD: 同様にランダム生成した強いパスワード
 #   - CORS_ALLOWED_ORIGINS: フロントエンドのオリジン（カンマ区切りで複数可）
+#   - TUNNEL_TOKEN: 本番で Cloudflare Tunnel を使う場合のみ
+# 各項目の用途・変更手順は .env.example を参照
+# 秘密情報が初期値のまま・短すぎる場合、backend は理由を表示して起動しない
 
 # 3. 全サービスを起動
 docker compose up --build

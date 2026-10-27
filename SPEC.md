@@ -145,7 +145,8 @@ vocal-analyzerの製品要件・設計上の決定事項・将来方針をまと
 - ログイン失敗のロックアウトはRedisで管理
 - エラーメッセージはユーザー列挙攻撃を防ぐため曖昧化（「メールアドレスまたはパスワードが正しくありません」）
 - 本番環境ではHTTPS必須（CF Pages + CF Tunnel が自動で TLS 終端する）
-- DBパスワード（`POSTGRES_PASSWORD`）は `docker-compose.yml` 内で環境変数化済み（Phase 9）。本格的な本番運用時には AWS Secrets Manager 等のシークレット管理ツールで注入する
+- 秘密情報（`SECRET_KEY` / `POSTGRES_PASSWORD` / `REDIS_PASSWORD`）は `.env` で管理し、`scripts/gen_secrets.py` で生成する。初期値のまま・短すぎる場合は backend / celery_worker が起動を止める（issue #41）。自宅PC＋CF Tunnel の構成のため、AWS Secrets Manager や Docker Secrets は使わない
+- Redis は `requirepass` でパスワードを設定し、ホストには公開しない（issue #28・#41）
 - `DATABASE_URL` は `docker-compose.yml` 内で `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` から組み立てるため、`.env` には個別のパスワード等を記載しないとつながらない
 - CORS 許可オリジンは `CORS_ALLOWED_ORIGINS` 環境変数で制御（Phase 9）。本番では `https://vocal-analyzer.supu361.dev` を許可
 - アップロードファイルのサイズ検証はチャンクストリーミングで早期拒否（Phase 9）。50MB 超は読み込みを中止して部分ファイルも削除
