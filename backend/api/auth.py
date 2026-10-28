@@ -5,7 +5,7 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,7 @@ from auth_utils import (
     get_current_user,
     hash_password,
     record_login_failure,
+    revoke_access_token,
     verify_password,
 )
 from database import get_db
@@ -133,8 +134,13 @@ def me(current_user: User = Depends(get_current_user)):
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(response: Response):
-    """ログアウト — httpOnly CookieのJWTを削除する"""
+def logout(response: Response, access_token: str | None = Cookie(default=None)):
+    """ログアウト — JWT を無効リストに入れ、httpOnly Cookie を削除する
+
+    Cookie が無い・トークンが不正でも 204 を返す（ログアウトは常に成功させる）
+    """
+    if access_token is not None:
+        revoke_access_token(access_token)
     # 発行時と属性を揃えて、ブラウザに同じ Cookie の削除だと確実に扱わせる
     response.delete_cookie(key=_AUTH_COOKIE_NAME, **_AUTH_COOKIE_ATTRIBUTES)
 

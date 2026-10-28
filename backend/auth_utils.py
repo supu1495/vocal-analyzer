@@ -5,6 +5,7 @@ JWT生成・検証、パスワードハッシュ化を担当する
 
 import logging
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -102,23 +103,54 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(user_id: int) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload = {"sub": str(user_id), "exp": expire}
+    # jti（JWT ID）: トークンごとの一意な ID。ログアウト時にこの ID で無効化する
+    payload = {"sub": str(user_id), "exp": expire, "jti": uuid.uuid4().hex}
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def _decode_token(token: str) -> int:
-    """トークンをデコードしてuser_idを返す。不正なら401を raise する"""
+def revoke_access_token(token: str) -> None:
+    """ログアウト時にトークンを無効リストへ入れる。トークンが不正・期限切れなら何もしない
+
+    記録はトークン自体の期限が切れるまで残す（期限切れのトークンはどのみち通らないため）
+    """
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = int(payload["sub"])
-        return user_id
-    except (jwt.InvalidTokenError, KeyError, ValueError) as e:
-        logger.warning("JWT validation failed: %s", e)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="認証情報が無効です。再ログインしてください。",
-            headers={"WWW-Authenticate": "Bearer"},
+        payload = _decode_token(token)
+    except HTTPException:
+        return
+
+    remaining_seconds = payload["exp"] - int(datetime.now(timezone.utc).timestamp())
+    if remaining_seconds > 0:
+        _redis.set(f"revoked_jti:{payload['jti']}", 1, ex=remaining_seconds)
+        logger.info("Token revoked: user_id=%s jti=%s", payload["sub"], payload["jti"])
+
+
+def _is_token_revoked(jti: str) -> bool:
+    return _redis.exists(f"revoked_jti:{jti}") > 0
+
+
+def _decode_token(token: str) -> dict:
+    """署名・有効期限と必須項目（sub / exp / jti）を検証して payload を返す。不正なら401を raise する
+
+    jti の無いトークン（ブラックリスト導入前に発行されたもの）は無効化できないため拒否する
+    """
+    try:
+        payload = jwt.decode(
+            token, SECRET_KEY, algorithms=[ALGORITHM],
+            options={"require": ["sub", "exp", "jti"]},
         )
+        int(payload["sub"])  # user_id として使えるかを先に確かめる
+        return payload
+    except (jwt.InvalidTokenError, ValueError) as e:
+        logger.warning("JWT validation failed: %s", e)
+        raise _invalid_credentials_error()
+
+
+def _invalid_credentials_error() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="認証情報が無効です。再ログインしてください。",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 def get_current_user(
@@ -131,7 +163,12 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="認証が必要です。",
         )
-    user_id = _decode_token(access_token)
+    payload = _decode_token(access_token)
+    if _is_token_revoked(payload["jti"]):
+        logger.warning("Revoked token used: user_id=%s jti=%s", payload["sub"], payload["jti"])
+        raise _invalid_credentials_error()
+
+    user_id = int(payload["sub"])
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="ユーザーが存在しません。")

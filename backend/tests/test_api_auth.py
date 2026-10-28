@@ -5,6 +5,8 @@
 - TestClient は base_url="https://testserver" を使用（secure Cookie の送受信に必要）
 """
 
+import jwt
+
 from main import allowed_origins
 
 
@@ -140,3 +142,42 @@ def test_logout_cookie_attributes_match_login(client):
     assert "samesite=lax" in set_cookie
     assert "secure" in set_cookie
     assert "httponly" in set_cookie
+
+
+def test_logout_revokes_token(client):
+    # ログアウト前にコピーされたトークンは、ログアウト後に使っても通らない
+    token = _register(client).cookies["access_token"]
+    client.post("/api/v1/auth/logout")
+
+    res = client.get("/api/v1/auth/me", headers={"Cookie": f"access_token={token}"})
+    assert res.status_code == 401
+
+
+def test_logout_stores_revoked_jti_until_token_expires(client, fake_redis):
+    token = _register(client).cookies["access_token"]
+    jti = jwt.decode(token, options={"verify_signature": False})["jti"]
+    client.post("/api/v1/auth/logout")
+
+    # 記録はトークンの有効期限（24時間）が切れるまで残る
+    ttl = fake_redis.ttl(f"revoked_jti:{jti}")
+    assert 1 <= ttl <= 60 * 60 * 24
+
+
+def test_logout_does_not_revoke_other_sessions(client):
+    # 別の端末（別のトークン）のログインは、こちらのログアウトでは無効にならない
+    other_device_token = _register(client).cookies["access_token"]
+    _login(client)  # この端末のトークン（Cookie が上書きされる）
+    client.post("/api/v1/auth/logout")  # この端末のトークンだけを無効にする
+
+    res = client.get("/api/v1/auth/me", headers={"Cookie": f"access_token={other_device_token}"})
+    assert res.status_code == 200
+
+
+def test_logout_without_cookie_returns_204(client):
+    res = client.post("/api/v1/auth/logout")
+    assert res.status_code == 204
+
+
+def test_logout_with_invalid_cookie_returns_204(client):
+    res = client.post("/api/v1/auth/logout", headers={"Cookie": "access_token=invalid.token.string"})
+    assert res.status_code == 204

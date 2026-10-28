@@ -48,10 +48,31 @@ def test_create_access_token_returns_string():
     assert len(token) > 0
 
 
-def test_decode_token_returns_user_id():
+def test_decode_token_returns_payload_with_jti():
     token = create_access_token(user_id=42)
-    user_id = _decode_token(token)
-    assert user_id == 42
+    payload = _decode_token(token)
+    assert payload["sub"] == "42"
+    assert payload["jti"]  # ログアウト時の無効化に使う ID が入っている
+
+
+def test_create_access_token_jti_is_unique():
+    # 同じユーザーでもトークンごとに別の jti（片方を無効化しても、もう片方に影響しない）
+    jti_1 = _decode_token(create_access_token(user_id=1))["jti"]
+    jti_2 = _decode_token(create_access_token(user_id=1))["jti"]
+    assert jti_1 != jti_2
+
+
+def test_decode_token_without_jti_raises_401():
+    # ブラックリスト導入前の形式（jti なし）は無効化できないため拒否する
+    expire = datetime.now(timezone.utc) + timedelta(minutes=5)
+    token_without_jti = jwt.encode(
+        {"sub": "1", "exp": expire},
+        auth_utils.SECRET_KEY,
+        algorithm=auth_utils.ALGORITHM,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        _decode_token(token_without_jti)
+    assert exc_info.value.status_code == 401
 
 
 def test_decode_token_tampered_raises_401():
@@ -62,8 +83,9 @@ def test_decode_token_tampered_raises_401():
 
 def test_decode_token_expired_raises_401():
     expire = datetime.now(timezone.utc) - timedelta(minutes=5)
+    # jti を入れて「期限切れ」だけが拒否の理由になるようにする
     expired_token = jwt.encode(
-        {"sub": "1", "exp": expire},
+        {"sub": "1", "exp": expire, "jti": "expired-token-jti"},
         auth_utils.SECRET_KEY,
         algorithm=auth_utils.ALGORITHM,
     )
