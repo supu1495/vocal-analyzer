@@ -47,14 +47,27 @@ return current
 def check_lockout(email: str) -> None:
     """ログイン失敗が規定回数（5回）に達している場合、リクエストを拒否して429エラーを返す
     429 = Too Many Requests（リクエスト過多）を意味するHTTPステータスコード
+    Retry-After ヘッダーで解除までの残り秒数を返す（フロントが再読み込み後も制限表示を復元するため）
     """
-    count = _redis.get(f"login_fail:{email}")
+    key = f"login_fail:{email}"
+    count = _redis.get(key)
     if count and int(count) >= _MAX_FAILURES:
-        logger.warning("Lockout triggered: email=%s failure_count=%d", email, int(count))
+        retry_after = _lockout_remaining_seconds(key)
+        logger.warning(
+            "Lockout triggered: email=%s failure_count=%d retry_after=%d",
+            email, int(count), retry_after,
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="ログイン試行回数が上限を超えました。15分後に再試行してください。",
+            detail="ログイン試行回数が上限を超えました。しばらくしてから再試行してください。",
+            headers={"Retry-After": str(retry_after)},
         )
+
+
+def _lockout_remaining_seconds(key: str) -> int:
+    """ロック解除までの残り秒数。TTL が取れない（-1: 期限なし / -2: キーなし）ときはロック時間の上限を返す"""
+    ttl = _redis.ttl(key)
+    return ttl if ttl > 0 else _LOCKOUT_SECONDS
 
 
 def record_login_failure(email: str) -> None:

@@ -5,6 +5,8 @@
 - TestClient は base_url="https://testserver" を使用（secure Cookie の送受信に必要）
 """
 
+from main import allowed_origins
+
 
 # ── ヘルパー ────────────────────────────────────────────────────────────────
 
@@ -81,6 +83,21 @@ def test_login_lockout_after_five_failures(client):
         _login(client, password="wrong")
     res = _login(client, password="wrong")
     assert res.status_code == 429
+
+
+def test_login_lockout_exposes_retry_after_to_frontend(client):
+    # 本番はフロントと API が別オリジンなので、Retry-After が CORS で公開されていないと JS から読めない
+    _register(client)
+    for _ in range(5):
+        _login(client, password="wrong")
+    res = client.post(
+        "/api/v1/auth/login",
+        json={"email": "test@example.com", "password": "wrong"},
+        headers={"Origin": allowed_origins[0]},
+    )
+    assert res.status_code == 429
+    assert 1 <= int(res.headers["retry-after"]) <= 15 * 60
+    assert "retry-after" in res.headers["access-control-expose-headers"].lower()
 
 
 def test_login_clears_lockout_on_success(client, fake_redis):

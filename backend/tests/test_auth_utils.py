@@ -97,6 +97,28 @@ def test_check_lockout_raises_429_when_locked(fake_redis):
     assert exc_info.value.status_code == 429
 
 
+def test_check_lockout_returns_retry_after(fake_redis):
+    email = "test@example.com"
+    for _ in range(5):
+        record_login_failure(email)
+
+    with pytest.raises(HTTPException) as exc_info:
+        check_lockout(email)
+    # 残り秒数は Redis の TTL。ロック直後なので 1〜900秒（15分）の範囲に入る
+    retry_after = int(exc_info.value.headers["Retry-After"])
+    assert 1 <= retry_after <= 15 * 60
+
+
+def test_check_lockout_retry_after_falls_back_when_no_ttl(fake_redis):
+    # TTL が取れない（期限なしのキー）場合はロック時間の上限（15分）を返す
+    email = "test@example.com"
+    fake_redis.set(f"login_fail:{email}", 5)
+
+    with pytest.raises(HTTPException) as exc_info:
+        check_lockout(email)
+    assert exc_info.value.headers["Retry-After"] == str(15 * 60)
+
+
 def test_record_login_failure_increments_count(fake_redis):
     email = "test@example.com"
     record_login_failure(email)
