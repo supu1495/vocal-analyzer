@@ -47,6 +47,15 @@ def test_login_success(client):
     assert "httponly" in res.headers["set-cookie"].lower()
 
 
+def test_login_cookie_is_samesite_lax(client):
+    # 他サイトからのフォーム送信に Cookie を付けさせない（CSRF 対策）
+    _register(client)
+    res = _login(client)
+    set_cookie = res.headers["set-cookie"].lower()
+    assert "samesite=lax" in set_cookie
+    assert "secure" in set_cookie
+
+
 def test_login_wrong_password(client):
     _register(client)
     res = _login(client, password="wrongpassword")
@@ -104,3 +113,13 @@ def test_logout_clears_cookie(client):
     assert res.status_code == 204
     # ログアウト後は /me が 401 を返す（Cookie が削除されているため）
     assert client.get("/api/v1/auth/me").status_code == 401
+
+
+def test_logout_cookie_attributes_match_login(client):
+    # 削除用の Set-Cookie も発行時と同じ属性で返す
+    _register(client)
+    res = client.post("/api/v1/auth/logout")
+    set_cookie = res.headers["set-cookie"].lower()
+    assert "samesite=lax" in set_cookie
+    assert "secure" in set_cookie
+    assert "httponly" in set_cookie

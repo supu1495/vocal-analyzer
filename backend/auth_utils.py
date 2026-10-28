@@ -26,6 +26,9 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24時間
 _MAX_FAILURES = 5         # この回数失敗するとロック
 _LOCKOUT_SECONDS = 60 * 15  # ロック持続時間: 15分
 
+# 分析タスクの持ち主を覚えておく期間。Celery の結果保存期間（result_expires の初期値 = 1日）に揃える
+_TASK_OWNER_TTL_SECONDS = 60 * 60 * 24
+
 _redis = redis.from_url(os.environ.get("REDIS_URL", "redis://redis:6379"))
 
 # タイミング攻撃対策: ユーザーが存在しない場合でも verify_password を実行するためのダミーハッシュ
@@ -63,6 +66,17 @@ def record_login_failure(email: str) -> None:
 def clear_lockout(email: str) -> None:
     """ログイン成功時に失敗カウントを削除する"""
     _redis.delete(f"login_fail:{email}")
+
+
+def save_task_owner(task_id: str, user_id: int) -> None:
+    """分析タスクの持ち主を記録する（status 確認で本人のタスクか照合するため）"""
+    _redis.set(f"task_owner:{task_id}", user_id, ex=_TASK_OWNER_TTL_SECONDS)
+
+
+def get_task_owner(task_id: str) -> int | None:
+    """分析タスクの持ち主の user_id を返す。記録が無い（存在しない・期限切れ）なら None"""
+    owner = _redis.get(f"task_owner:{task_id}")
+    return int(owner) if owner is not None else None
 
 
 def hash_password(password: str) -> str:

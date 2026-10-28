@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 logger = logging.getLogger(__name__)
 
 from auth_utils import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
     DUMMY_HASH,
     check_lockout,
     clear_lockout,
@@ -25,6 +26,16 @@ from database import get_db
 from models import User
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+
+_AUTH_COOKIE_NAME = "access_token"
+
+# SameSite=Lax: フロント（vocal-analyzer.supu361.dev）と API（vocal-api.supu361.dev）は
+# 同じサイト（supu361.dev）なので fetch に Cookie が付く。他サイトからのフォーム送信には付かない（CSRF 対策）
+_AUTH_COOKIE_ATTRIBUTES = {
+    "httponly": True,
+    "secure": True,
+    "samesite": "lax",
+}
 
 
 # ── スキーマ ──────────────────────────────────────────────────────────────────
@@ -81,15 +92,7 @@ def register(body: RegisterRequest, response: Response, db: Session = Depends(ge
     db.refresh(user)
     logger.info("User registered: user_id=%d email=%s", user.id, user.email)
 
-    token = create_access_token(user.id)
-    response.set_cookie(
-        key="access_token",
-        value=token,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        max_age=60 * 60 * 24,
-    )
+    _set_auth_cookie(response, create_access_token(user.id))
     return AuthResponse(user_id=user.id, email=user.email)
 
 
@@ -115,15 +118,7 @@ def login(body: LoginRequest, response: Response, db: Session = Depends(get_db))
 
     clear_lockout(body.email)
     logger.info("Login success: user_id=%d email=%s", user.id, user.email)
-    token = create_access_token(user.id)
-    response.set_cookie(
-        key="access_token",
-        value=token,
-        httponly=True,
-        secure=True,
-        samesite="none",
-        max_age=60 * 60 * 24,
-    )
+    _set_auth_cookie(response, create_access_token(user.id))
     return AuthResponse(user_id=user.id, email=user.email)
 
 
@@ -140,4 +135,18 @@ def me(current_user: User = Depends(get_current_user)):
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(response: Response):
     """ログアウト — httpOnly CookieのJWTを削除する"""
-    response.delete_cookie(key="access_token")
+    # 発行時と属性を揃えて、ブラウザに同じ Cookie の削除だと確実に扱わせる
+    response.delete_cookie(key=_AUTH_COOKIE_NAME, **_AUTH_COOKIE_ATTRIBUTES)
+
+
+# ── プライベート関数 ──────────────────────────────────────────────────────────
+
+
+def _set_auth_cookie(response: Response, token: str) -> None:
+    """JWT を httpOnly Cookie にセットする（register / login 共通）"""
+    response.set_cookie(
+        key=_AUTH_COOKIE_NAME,
+        value=token,
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        **_AUTH_COOKIE_ATTRIBUTES,
+    )

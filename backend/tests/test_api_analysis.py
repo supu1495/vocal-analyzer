@@ -3,7 +3,7 @@
 
 Phase 8 以降はアップロードが非同期（Celery タスク）になっているため
 - POST /upload はタスク登録 → task_id 返却をテスト
-- GET /analysis/status/{task_id} は AsyncResult をモックして動作確認
+- GET /analysis/status/{task_id} は AsyncResult をモックし、持ち主の記録は fakeredis に直接書いて動作確認
 - GET /analysis/{id} は DB に直接レコードを作成して動作確認
 """
 
@@ -11,6 +11,7 @@ import io
 import wave
 from unittest.mock import patch, MagicMock
 
+from auth_utils import get_task_owner, save_task_owner
 from models import AnalysisResult, User
 
 
@@ -96,8 +97,20 @@ def test_get_analysis_status_unauthenticated(client):
     assert res.status_code == 401
 
 
-def test_get_analysis_status_success(client):
+def test_upload_saves_task_owner(client, db):
     _register_and_login(client)
+    user = db.query(User).first()
+    mock_task = MagicMock()
+    mock_task.id = "test-task-id"
+    with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task):
+        _upload(client)
+    assert get_task_owner("test-task-id") == user.id
+
+
+def test_get_analysis_status_success(client, db):
+    _register_and_login(client)
+    user = db.query(User).first()
+    save_task_owner("some-task-id", user.id)
     with patch("api.analysis.celery_app.AsyncResult") as mock_async_result:
         mock_async_result.return_value.status = "SUCCESS"
         mock_async_result.return_value.result = 42
@@ -106,13 +119,35 @@ def test_get_analysis_status_success(client):
     assert res.json() == {"status": "SUCCESS", "analysis_id": 42}
 
 
-def test_get_analysis_status_pending(client):
+def test_get_analysis_status_pending(client, db):
     _register_and_login(client)
+    user = db.query(User).first()
+    save_task_owner("some-task-id", user.id)
     with patch("api.analysis.celery_app.AsyncResult") as mock_async_result:
         mock_async_result.return_value.status = "PENDING"
         res = client.get("/api/v1/analysis/status/some-task-id")
     assert res.status_code == 200
     assert res.json()["status"] == "PENDING"
+
+
+def test_get_analysis_status_unknown_task_returns_404(client):
+    # Celery は存在しない task_id にも PENDING を返すため、持ち主の記録で弾けているかを見る
+    _register_and_login(client)
+    res = client.get("/api/v1/analysis/status/unknown-task-id")
+    assert res.status_code == 404
+
+
+def test_get_analysis_status_other_user_returns_404(client, db):
+    # User A: 登録してタスクの持ち主として記録する
+    _register_and_login(client, email="user_a@example.com")
+    user_a = db.query(User).filter(User.email == "user_a@example.com").first()
+    save_task_owner("user-a-task-id", user_a.id)
+
+    # User B: 登録して User A のタスクの状態を確認しようとする
+    client.post("/api/v1/auth/logout")
+    _register_and_login(client, email="user_b@example.com")
+    res = client.get("/api/v1/analysis/status/user-a-task-id")
+    assert res.status_code == 404
 
 
 # ── GET /api/v1/analysis/{analysis_id} ────────────────────────────────────────
