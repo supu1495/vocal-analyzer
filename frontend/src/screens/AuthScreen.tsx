@@ -1,6 +1,51 @@
 import { useState, useEffect, type CSSProperties } from 'react'
 import { API_BASE, type AuthState } from '../types'
 
+// ログイン制限の解除時刻（ミリ秒）を保存するキー。再読み込みしても制限表示を復元するため
+const LOCKED_UNTIL_KEY = 'vocal-analyzer-login-locked-until'
+// サーバーが Retry-After を返さなかったときに使うロック時間（サーバー側の15分に合わせる）
+const DEFAULT_LOCKOUT_SECONDS = 15 * 60
+
+// localStorage はプライベートブラウズ等で使えないことがあるため、失敗しても画面は動かす
+function loadLockedUntil(): number | null {
+  try {
+    const lockedUntil = Number(localStorage.getItem(LOCKED_UNTIL_KEY))
+    if (lockedUntil > Date.now()) return lockedUntil
+    localStorage.removeItem(LOCKED_UNTIL_KEY)
+  } catch {
+    // 読めなければ制限なしとして始める（実際の制限はサーバーがかける）
+  }
+  return null
+}
+
+function saveLockedUntil(lockedUntil: number) {
+  try {
+    localStorage.setItem(LOCKED_UNTIL_KEY, String(lockedUntil))
+  } catch {
+    // 保存できなければ再読み込みで表示が消えるだけ
+  }
+}
+
+function clearLockedUntil() {
+  try {
+    localStorage.removeItem(LOCKED_UNTIL_KEY)
+  } catch {
+    // 消せなくても次回の読み込み時に期限切れとして扱われる
+  }
+}
+
+// Retry-After（秒）から解除時刻を求める。表示（分単位）と実際の解除がずれないよう分に切り上げる
+function lockedUntilFromRetryAfter(retryAfterHeader: string | null): number {
+  const retryAfter = Number(retryAfterHeader)
+  const seconds = retryAfter > 0 ? retryAfter : DEFAULT_LOCKOUT_SECONDS
+  const ONE_MINUTE_MS = 60 * 1000
+  return Math.ceil((Date.now() + seconds * 1000) / ONE_MINUTE_MS) * ONE_MINUTE_MS
+}
+
+function formatClockTime(time: number): string {
+  return new Date(time).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })
+}
+
 export function AuthScreen({
   mode,
   onSuccess,
@@ -14,16 +59,20 @@ export function AuthScreen({
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [locked, setLocked] = useState(false)
+  // 初回表示時に localStorage から復元する（再読み込みで制限表示が消えないように）
+  const [lockedUntil, setLockedUntil] = useState<number | null>(loadLockedUntil)
+  const locked = lockedUntil !== null
 
   const isLogin = mode === 'login'
 
   useEffect(() => {
-    if (!locked) return
-    const LOCKOUT_MS = 15 * 60 * 1000
-    const timer = setTimeout(() => setLocked(false), LOCKOUT_MS)
+    if (lockedUntil === null) return
+    const timer = setTimeout(() => {
+      clearLockedUntil()
+      setLockedUntil(null)
+    }, lockedUntil - Date.now())
     return () => clearTimeout(timer)
-  }, [locked])
+  }, [lockedUntil])
 
   const handleSubmit = async () => {
     setError('')
@@ -46,8 +95,10 @@ export function AuthScreen({
       })
       const data = await res.json()
       if (res.status === 429) {
-        setLocked(true)
-        setError(data.detail ?? 'ログイン試行回数が上限を超えました。15分後に再試行してください。')
+        const until = lockedUntilFromRetryAfter(res.headers.get('Retry-After'))
+        saveLockedUntil(until)
+        setLockedUntil(until)
+        setError(data.detail ?? 'ログイン試行回数が上限を超えました。しばらくしてから再試行してください。')
         return
       }
       if (!res.ok) throw new Error(data.detail ?? 'エラーが発生しました。')
@@ -112,7 +163,7 @@ export function AuthScreen({
           cursor: loading || locked ? 'not-allowed' : 'pointer', transition: 'all 0.2s ease', marginBottom: '20px',
         }}
       >
-        {locked ? '⏱ ログイン制限中（15分）' : loading ? '処理中...' : isLogin ? 'ログイン →' : '登録する →'}
+        {locked ? `⏱ ログイン制限中（${formatClockTime(lockedUntil)} まで）` : loading ? '処理中...' : isLogin ? 'ログイン →' : '登録する →'}
       </button>
 
       <p style={{ textAlign: 'center', color: '#555', fontSize: '13px' }}>

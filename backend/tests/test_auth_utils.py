@@ -48,10 +48,31 @@ def test_create_access_token_returns_string():
     assert len(token) > 0
 
 
-def test_decode_token_returns_user_id():
+def test_decode_token_returns_payload_with_jti():
     token = create_access_token(user_id=42)
-    user_id = _decode_token(token)
-    assert user_id == 42
+    payload = _decode_token(token)
+    assert payload["sub"] == "42"
+    assert payload["jti"]  # ログアウト時の無効化に使う ID が入っている
+
+
+def test_create_access_token_jti_is_unique():
+    # 同じユーザーでもトークンごとに別の jti（片方を無効化しても、もう片方に影響しない）
+    jti_1 = _decode_token(create_access_token(user_id=1))["jti"]
+    jti_2 = _decode_token(create_access_token(user_id=1))["jti"]
+    assert jti_1 != jti_2
+
+
+def test_decode_token_without_jti_raises_401():
+    # ブラックリスト導入前の形式（jti なし）は無効化できないため拒否する
+    expire = datetime.now(timezone.utc) + timedelta(minutes=5)
+    token_without_jti = jwt.encode(
+        {"sub": "1", "exp": expire},
+        auth_utils.SECRET_KEY,
+        algorithm=auth_utils.ALGORITHM,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        _decode_token(token_without_jti)
+    assert exc_info.value.status_code == 401
 
 
 def test_decode_token_tampered_raises_401():
@@ -62,8 +83,9 @@ def test_decode_token_tampered_raises_401():
 
 def test_decode_token_expired_raises_401():
     expire = datetime.now(timezone.utc) - timedelta(minutes=5)
+    # jti を入れて「期限切れ」だけが拒否の理由になるようにする
     expired_token = jwt.encode(
-        {"sub": "1", "exp": expire},
+        {"sub": "1", "exp": expire, "jti": "expired-token-jti"},
         auth_utils.SECRET_KEY,
         algorithm=auth_utils.ALGORITHM,
     )
@@ -95,6 +117,28 @@ def test_check_lockout_raises_429_when_locked(fake_redis):
     with pytest.raises(HTTPException) as exc_info:
         check_lockout(email)
     assert exc_info.value.status_code == 429
+
+
+def test_check_lockout_returns_retry_after(fake_redis):
+    email = "test@example.com"
+    for _ in range(5):
+        record_login_failure(email)
+
+    with pytest.raises(HTTPException) as exc_info:
+        check_lockout(email)
+    # 残り秒数は Redis の TTL。ロック直後なので 1〜900秒（15分）の範囲に入る
+    retry_after = int(exc_info.value.headers["Retry-After"])
+    assert 1 <= retry_after <= 15 * 60
+
+
+def test_check_lockout_retry_after_falls_back_when_no_ttl(fake_redis):
+    # TTL が取れない（期限なしのキー）場合はロック時間の上限（15分）を返す
+    email = "test@example.com"
+    fake_redis.set(f"login_fail:{email}", 5)
+
+    with pytest.raises(HTTPException) as exc_info:
+        check_lockout(email)
+    assert exc_info.value.headers["Retry-After"] == str(15 * 60)
 
 
 def test_record_login_failure_increments_count(fake_redis):

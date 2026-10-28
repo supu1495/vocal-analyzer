@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from celery_app import celery_app
 from tasks import analyze_audio_task
-from auth_utils import get_current_user
+from auth_utils import get_current_user, get_task_owner, save_task_owner
 from database import get_db
 from models import AnalysisResult, User
 
@@ -52,6 +52,7 @@ async def upload_audio(
     tmp_path = await _stream_to_shared_volume(audio_file)
 
     task = analyze_audio_task.delay(tmp_path, song_title, artist_name, current_user.id)
+    save_task_owner(task.id, current_user.id)
     logger.info("Task queued: task_id=%s user_id=%d", task.id, current_user.id)
 
     return {
@@ -70,7 +71,17 @@ def get_analysis_status(
 
     - task_id: アップロード時に返された task_id
     - 戻り値: status（PENDING / SUCCESS / FAILURE）と analysis_id（完了時のみ）
+    - 本人のタスクでなければ 404（他人のタスク・存在しないタスクを区別せず、存在を推測させない）
     """
+    owner_id = get_task_owner(task_id)
+    if owner_id != current_user.id:
+        if owner_id is not None:
+            logger.warning(
+                "Forbidden task status access: requester_id=%d task_id=%s owner_id=%d",
+                current_user.id, task_id, owner_id,
+            )
+        raise HTTPException(status_code=404, detail="分析タスクが見つかりません。")
+
     # アプリを明示的に渡さないと DisabledBackend を見に行って AttributeError になる
     result = celery_app.AsyncResult(task_id)
 

@@ -35,6 +35,9 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     # JSON / FormData で使う Content-Type のみ許可（Cookie は allow_credentials で別途扱われる）
     allow_headers=["Content-Type"],
+    # 別オリジンの fetch では標準外のレスポンスヘッダーを JS から読めないため明示的に公開する
+    # Retry-After: ログイン制限（429）の残り秒数。フロントが解除時刻の表示に使う
+    expose_headers=["Retry-After"],
 )
 
 # ルーターを登録
