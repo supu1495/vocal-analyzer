@@ -3,7 +3,9 @@
 ユーザー登録・ログイン・プロフィール取得を担当する
 """
 
+import hmac
 import logging
+import os
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from pydantic import BaseModel, EmailStr
@@ -45,6 +47,7 @@ _AUTH_COOKIE_ATTRIBUTES = {
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
+    invite_code: str
 
 
 class LoginRequest(BaseModel):
@@ -73,7 +76,14 @@ def register(body: RegisterRequest, response: Response, db: Session = Depends(ge
 
     - email: メールアドレス（一意）
     - password: パスワード（8文字以上推奨）
+    - invite_code: 招待コード（環境変数 INVITE_CODE と一致したときだけ登録できる）
     """
+    # 招待コードを最初に確かめる。後にすると、招待されていない人でも
+    # 409（登録済み）の返事からメールアドレスの登録有無を知れてしまう
+    if not _is_valid_invite_code(body.invite_code):
+        logger.warning("Register rejected (invalid invite code): email=%s", body.email)
+        raise HTTPException(status_code=403, detail="招待コードが正しくありません。")
+
     if len(body.password) < 8:
         logger.info("Register rejected (weak password): email=%s", body.email)
         raise HTTPException(status_code=400, detail="パスワードは8文字以上で設定してください。")
@@ -146,6 +156,19 @@ def logout(response: Response, access_token: str | None = Cookie(default=None)):
 
 
 # ── プライベート関数 ──────────────────────────────────────────────────────────
+
+
+def _is_valid_invite_code(invite_code: str) -> bool:
+    """招待コードが環境変数 INVITE_CODE と一致するか
+
+    INVITE_CODE が空・未設定なら誰も登録できない（設定し忘れで誰でも登録できる状態に戻らないように）
+    """
+    expected = os.environ.get("INVITE_CODE", "")
+    if not expected:
+        return False
+    # compare_digest: 一致・不一致にかかわらず比較時間を揃え、タイミング攻撃でコードを1文字ずつ当てられないようにする
+    # str のままだと ASCII 以外（全角など）で TypeError になるため、bytes にして比べる
+    return hmac.compare_digest(invite_code.encode(), expected.encode())
 
 
 def _set_auth_cookie(response: Response, token: str) -> None:

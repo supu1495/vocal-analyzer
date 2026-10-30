@@ -8,6 +8,7 @@ Phase 8 以降はアップロードが非同期（Celery タスク）になっ�
 """
 
 import io
+import os
 import wave
 from unittest.mock import patch, MagicMock
 
@@ -29,7 +30,10 @@ def _create_minimal_wav() -> bytes:
 
 
 def _register_and_login(client, email="test@example.com", password="password123"):
-    client.post("/api/v1/auth/register", json={"email": email, "password": password})
+    client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "password": password, "invite_code": os.environ["INVITE_CODE"]},
+    )
 
 
 def _upload(client, filename="test.wav", content_type="audio/wav", content=None):

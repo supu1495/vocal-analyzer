@@ -5,6 +5,8 @@
 - TestClient は base_url="https://testserver" を使用（secure Cookie の送受信に必要）
 """
 
+import os
+
 import jwt
 
 from main import allowed_origins
@@ -12,8 +14,13 @@ from main import allowed_origins
 
 # ── ヘルパー ────────────────────────────────────────────────────────────────
 
-def _register(client, email="test@example.com", password="password123"):
-    return client.post("/api/v1/auth/register", json={"email": email, "password": password})
+def _register(client, email="test@example.com", password="password123", invite_code=None):
+    if invite_code is None:
+        invite_code = os.environ["INVITE_CODE"]
+    return client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "password": password, "invite_code": invite_code},
+    )
 
 
 def _login(client, email="test@example.com", password="password123"):
@@ -33,6 +40,48 @@ def test_register_duplicate_email(client):
     _register(client)
     res = _register(client)
     assert res.status_code == 409
+
+
+def test_register_wrong_invite_code(client):
+    res = _register(client, invite_code="wrong-code")
+    assert res.status_code == 403
+    assert "access_token" not in res.cookies
+
+
+def test_register_empty_invite_code(client):
+    res = _register(client, invite_code="")
+    assert res.status_code == 403
+
+
+def test_register_fullwidth_invite_code(client):
+    """全角文字でも 500（TypeError）にならず 403 を返す"""
+    res = _register(client, invite_code="ｔｅｓｔ－ｉｎｖｉｔｅ－ｃｏｄｅ")
+    assert res.status_code == 403
+
+
+def test_register_without_invite_code_field(client):
+    res = client.post(
+        "/api/v1/auth/register",
+        json={"email": "test@example.com", "password": "password123"},
+    )
+    assert res.status_code == 422
+
+
+def test_register_rejected_when_invite_code_not_configured(client, monkeypatch):
+    """INVITE_CODE が未設定なら、どんなコードでも登録できない"""
+    monkeypatch.delenv("INVITE_CODE")
+    res = client.post(
+        "/api/v1/auth/register",
+        json={"email": "test@example.com", "password": "password123", "invite_code": ""},
+    )
+    assert res.status_code == 403
+
+
+def test_register_wrong_invite_code_does_not_reveal_existing_email(client):
+    """招待コードが違えば、登録済みのメールアドレスでも 409 ではなく 403 を返す"""
+    _register(client)
+    res = _register(client, invite_code="wrong-code")
+    assert res.status_code == 403
 
 
 def test_register_short_password(client):

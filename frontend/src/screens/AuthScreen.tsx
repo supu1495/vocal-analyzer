@@ -57,6 +57,7 @@ export function AuthScreen({
 }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [inviteCode, setInviteCode] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   // 初回表示時に localStorage から復元する（再読み込みで制限表示が消えないように）
@@ -80,6 +81,10 @@ export function AuthScreen({
       setError('メールアドレスとパスワードを入力してください。')
       return
     }
+    if (!isLogin && !inviteCode.trim()) {
+      setError('招待コードを入力してください。')
+      return
+    }
     if (!isLogin && password.length < 8) {
       setError('パスワードは8文字以上で設定してください。')
       return
@@ -91,7 +96,8 @@ export function AuthScreen({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ email, password }),
+        // 招待コードはコピー時に前後の空白・改行が入りやすく、1文字でも違うと 403 になるため trim する
+        body: JSON.stringify(isLogin ? { email, password } : { email, password, invite_code: inviteCode.trim() }),
       })
       const data = await res.json()
       if (res.status === 429) {
@@ -124,7 +130,7 @@ export function AuthScreen({
           {isLogin ? 'ログイン' : 'アカウント作成'}
         </h1>
         <p style={{ color: '#555', fontSize: '13px' }}>
-          {isLogin ? 'メールアドレスとパスワードでログインしてください。' : 'メールアドレスとパスワードを登録してください。'}
+          {isLogin ? 'メールアドレスとパスワードでログインしてください。' : '招待コードを受け取った方のみ登録できます。'}
         </p>
       </div>
 
@@ -149,6 +155,19 @@ export function AuthScreen({
             onKeyDown={e => e.key === 'Enter' && handleSubmit()}
           />
         </div>
+        {!isLogin && (
+          <div>
+            <label style={{ color: '#666', fontSize: '11px', letterSpacing: '0.1em', display: 'block', marginBottom: '6px' }}>
+              招待コード
+            </label>
+            {/* type="text": 貼り付けたコードが正しいか目で確かめられるように */}
+            <input
+              type="text" value={inviteCode} onChange={e => setInviteCode(e.target.value)}
+              autoComplete="off" spellCheck={false} style={inputStyle}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+            />
+          </div>
+        )}
       </div>
 
       {error && <p style={{ color: '#f87171', fontSize: '13px', marginBottom: '16px', textAlign: 'center' }}>{error}</p>}
