@@ -28,7 +28,7 @@
 
 ### セッション開始時
 ・`CLAUDE.md` 内の「現在の状態」セクションで現在のブランチ・進捗を確認する
-・残作業は GitHub issue で管理している。作業対象の issue を `gh issue view <番号>` で読み、関連・依存する issue も読む
+・残作業は GitHub issue で管理している。作業対象の issue を `gh issue view <番号>`（本文）と `gh issue view <番号> --comments`（コメント）の両方で読み、関連・依存する issue も読む。コメントで追加された項目も作業対象に含める（Claude Code から実行すると `--comments` 付きではコメントしか表示されないため、両方実行する）
 ・必要に応じて `SPEC.md` で機能要件・設計方針を確認する
 ・`TODO_NEXT_SESSION.md` は 2026-10-19 に廃止した。中身は GitHub issue・本ファイル・`docs/` に移してある。「#〇〇」は常に GitHub issue の番号を指す
 
