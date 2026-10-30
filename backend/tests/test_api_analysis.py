@@ -94,6 +94,90 @@ def test_upload_success(client):
     assert res.json()["status"] == "processing"
 
 
+def test_upload_rejected_while_analysis_in_progress(client):
+    """分析中に2件目を送ると 429"""
+    _register_and_login(client)
+    mock_task = MagicMock()
+    mock_task.id = "test-task-id"
+    with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task) as mock_delay:
+        first = _upload(client)
+        second = _upload(client)
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert mock_delay.call_count == 1
+
+
+def test_upload_slot_is_per_user(client):
+    """ほかのユーザーが分析中でも、自分のアップロードは通る"""
+    mock_task = MagicMock()
+    mock_task.id = "test-task-id"
+    with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task):
+        _register_and_login(client, email="user_a@example.com")
+        assert _upload(client).status_code == 200
+        client.post("/api/v1/auth/logout")
+        _register_and_login(client, email="user_b@example.com")
+        assert _upload(client).status_code == 200
+
+
+def test_upload_slot_released_when_file_rejected(client):
+    """ファイルの中身で弾かれたら分析中の印を外し、次のアップロードを受け付ける"""
+    _register_and_login(client)
+    rejected = _upload(client, content=b"not an audio file")
+    assert rejected.status_code == 400
+
+    mock_task = MagicMock()
+    mock_task.id = "test-task-id"
+    with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task):
+        assert _upload(client).status_code == 200
+
+
+def test_upload_slot_released_when_queueing_fails(client):
+    """タスクの登録に失敗したら分析中の印を外す"""
+    _register_and_login(client)
+    with patch("api.analysis.analyze_audio_task.delay", side_effect=ConnectionError("broker down")):
+        try:
+            _upload(client)
+        except ConnectionError:
+            pass  # TestClient はサーバー側の例外をそのまま投げ直す
+
+    mock_task = MagicMock()
+    mock_task.id = "test-task-id"
+    with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task):
+        assert _upload(client).status_code == 200
+
+
+def test_upload_slot_has_expiry(client, db, fake_redis):
+    """worker が強制終了されても印が残り続けないよう、有効期限が付いている"""
+    _register_and_login(client)
+    user = db.query(User).first()
+    mock_task = MagicMock()
+    mock_task.id = "test-task-id"
+    with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task):
+        _upload(client)
+    ttl = fake_redis.ttl(f"active_task:{user.id}")
+    assert 0 < ttl <= 20 * 60
+
+
+def test_task_releases_slot_when_analysis_fails(fake_redis, tmp_path):
+    """分析が失敗しても、タスクの finally で分析中の印を外す"""
+    from tasks import analyze_audio_task
+    from upload_limits import acquire_analysis_slot
+
+    user_id = 1
+    assert acquire_analysis_slot(user_id)
+    audio_path = tmp_path / "test.wav"
+    audio_path.write_bytes(_create_minimal_wav())
+
+    with patch("tasks._get_analyzer") as mock_get_analyzer, patch("tasks.SessionLocal"):
+        mock_get_analyzer.return_value.analyze.side_effect = RuntimeError("analysis failed")
+        try:
+            analyze_audio_task(str(audio_path), "", "", user_id)
+        except RuntimeError:
+            pass
+
+    assert acquire_analysis_slot(user_id)  # 印が外れていれば、もう一度付けられる
+
+
 # ── GET /api/v1/analysis/status/{task_id} ─────────────────────────────────────
 
 def test_get_analysis_status_unauthenticated(client):

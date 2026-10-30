@@ -11,6 +11,7 @@ from celery_app import celery_app
 from database import SessionLocal
 from audio.analyzer import AudioAnalyzer
 from models import AnalysisResult
+from upload_limits import release_analysis_slot
 
 logger = logging.getLogger(__name__)
 
@@ -86,3 +87,5 @@ def analyze_audio_task(
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
         db.close()
+        # 次のアップロードを受け付けられるようにする
+        release_analysis_slot(user_id)

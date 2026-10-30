@@ -38,7 +38,11 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
       form.append('audio_file', file)
       const url = `${API_BASE}/api/v1/analysis/upload?song_title=${encodeURIComponent(songTitle)}&artist_name=${encodeURIComponent(artistName)}`
       const res = await fetch(url, { method: 'POST', credentials: 'include', body: form })
-      if (!res.ok) throw new Error(`サーバーエラー: ${res.status}`)
+      if (!res.ok) {
+        // 429（分析中・回数上限）などはサーバーのメッセージを出す。detail が文字列でない（422 等）・JSON でないときは番号だけ出す
+        const data = await res.json().catch(() => null)
+        throw new Error(typeof data?.detail === 'string' ? data.detail : `サーバーエラー: ${res.status}`)
+      }
       const { task_id } = await res.json()
 
       let analysisId: number | null = null

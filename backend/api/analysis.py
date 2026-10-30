@@ -14,6 +14,7 @@ from tasks import analyze_audio_task
 from auth_utils import get_current_user, get_task_owner, save_task_owner
 from database import get_db
 from models import AnalysisResult, User
+from upload_limits import acquire_analysis_slot, release_analysis_slot
 
 logger = logging.getLogger(__name__)
 
@@ -41,17 +42,30 @@ async def upload_audio(
     - song_title: 楽曲名（任意）
     - artist_name: アーティスト名（任意）
     - 戻り値: task_id（ステータス確認に使用）
+    - 同時に分析できるのは1人1件。分析中なら 429
     """
     _validate_audio_content_type(audio_file)
+
+    if not acquire_analysis_slot(current_user.id):
+        logger.warning("Upload rejected (analysis in progress): user_id=%d", current_user.id)
+        raise HTTPException(
+            status_code=429,
+            detail="分析中の音声があります。終わってから次をアップロードしてください。",
+        )
 
     logger.info(
         "Upload received: user_id=%d filename=%s content_type=%s",
         current_user.id, audio_file.filename, audio_file.content_type,
     )
 
-    tmp_path = await _stream_to_shared_volume(audio_file)
+    try:
+        tmp_path = await _stream_to_shared_volume(audio_file)
+        task = analyze_audio_task.delay(tmp_path, song_title, artist_name, current_user.id)
+    except Exception:
+        # タスクに登録できなかったときは、分析中の印をここで外す（登録後は tasks.py の finally で外す）
+        release_analysis_slot(current_user.id)
+        raise
 
-    task = analyze_audio_task.delay(tmp_path, song_title, artist_name, current_user.id)
     save_task_owner(task.id, current_user.id)
     logger.info("Task queued: task_id=%s user_id=%d", task.id, current_user.id)
 

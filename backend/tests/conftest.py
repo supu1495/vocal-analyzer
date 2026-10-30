@@ -58,7 +58,7 @@ def fake_redis():
 
     fake_r.eval = fake_eval
 
-    with patch("auth_utils._redis", fake_r):
+    with patch("auth_utils._redis", fake_r), patch("upload_limits._redis", fake_r):
         yield fake_r
 
 
