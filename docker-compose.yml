@@ -16,6 +16,7 @@ services:
       - /app/node_modules
     depends_on:
       - backend
+    restart: unless-stopped
     logging: *default-logging
 
   backend:
@@ -44,12 +45,15 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    restart: unless-stopped
     logging: *default-logging
 
   celery_worker:
     build:
       context: ./backend
-    command: celery -A celery_app worker --loglevel=info
+    # 分析は1件ずつ処理する。プロセスごとに Demucs と Crepe を読み込むため、
+    # 未指定（CPU コア数ぶん）だと同時に複数来たときにメモリが足りなくなる
+    command: celery -A celery_app worker --loglevel=info --concurrency=1
     volumes:
       - ./backend:/app
       - vocal_uploads:/tmp/vocal_analyzer
@@ -68,6 +72,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    restart: unless-stopped
     logging: *default-logging
 
   db:
@@ -84,12 +89,17 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    restart: unless-stopped
     logging: *default-logging
 
   redis:
     image: redis:7
     # パスワードなしでは読み書きできないようにする（ロックアウト回数・タスクキューの改ざん対策）
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    # --appendonly yes: 書き込みのたびにファイル（/data/appendonlydir）へ追記し、作り直しや停止のあとも
+    # ログアウト済みトークン・ログイン制限の回数・task の持ち主が消えないようにする
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
     environment:
       # redis-cli はこの環境変数からパスワードを読む（-a で渡すと警告が出るため）
       REDISCLI_AUTH: ${REDIS_PASSWORD}
@@ -98,6 +108,7 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
     logging: *default-logging
 
   nginx:
@@ -109,16 +120,26 @@ services:
     depends_on:
       - frontend
       - backend
+    # restart は付けない。ホストの Apache などが 80 番を使っていると起動に失敗し、再起動を繰り返すため
+    # 本番は cloudflared → backend で直接つながっており、nginx が止まっていても影響しない
     logging: *default-logging
 
   cloudflared:
     image: cloudflare/cloudflared:latest
     command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    # 本番（デスクトップ）だけで動かす。本番の .env にだけ COMPOSE_PROFILES=prod を書く
+    # 開発用のノートPCで起動すると、同じトンネルにつながって本番のリクエストを受けてしまうため
+    profiles: ["prod"]
     restart: unless-stopped
+    # backend の準備ができてからトンネルを開き、起動直後の 502 を防ぐ
+    # ただし docker compose up のときだけ効く。PC 再起動後の自動起動（restart）では Docker 本体が
+    # depends_on を見ないため、backend より先に起動して一時的に 502 になることがある
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     logging: *default-logging
 
 volumes:
   postgres_data:
   vocal_uploads:
+  redis_data:
