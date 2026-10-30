@@ -12,8 +12,12 @@ import os
 import wave
 from unittest.mock import patch, MagicMock
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from auth_utils import get_task_owner, save_task_owner
 from models import AnalysisResult, User
+from upload_limits import release_analysis_slot
 
 
 # ── ヘルパー ───────────────────────────────────────────────────────────────────
@@ -176,6 +180,92 @@ def test_task_releases_slot_when_analysis_fails(fake_redis, tmp_path):
             pass
 
     assert acquire_analysis_slot(user_id)  # 印が外れていれば、もう一度付けられる
+
+
+def _upload_and_finish(client, db):
+    """アップロードして、分析が終わった状態にする（分析中の印を外して次を送れるようにする）"""
+    mock_task = MagicMock()
+    mock_task.id = "test-task-id"
+    with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task):
+        res = _upload(client)
+    for user in db.query(User).all():
+        release_analysis_slot(user.id)
+    return res
+
+
+def _jst(*args) -> datetime:
+    return datetime(*args, tzinfo=ZoneInfo("Asia/Tokyo"))
+
+
+def test_upload_rejected_after_daily_limit(client, db):
+    """1日の上限（10回）までは通り、11回目は 429"""
+    _register_and_login(client)
+    with patch("upload_limits._now_jst", return_value=_jst(2026, 10, 30, 12, 0)):
+        for _ in range(10):
+            assert _upload_and_finish(client, db).status_code == 200
+        res = _upload_and_finish(client, db)
+    assert res.status_code == 429
+    assert "10回" in res.json()["detail"]
+
+
+def test_daily_limit_retry_after_is_seconds_until_jst_midnight(client, db, monkeypatch):
+    """Retry-After は次の日本時間0時までの秒数（23:59:30 なら30秒）"""
+    monkeypatch.setenv("DAILY_UPLOAD_LIMIT", "1")
+    _register_and_login(client)
+    with patch("upload_limits._now_jst", return_value=_jst(2026, 10, 30, 23, 59, 30)):
+        _upload_and_finish(client, db)
+        res = _upload_and_finish(client, db)
+    assert res.status_code == 429
+    assert res.headers["Retry-After"] == "30"
+
+
+def test_daily_limit_retry_after_rounds_up(client, db, monkeypatch):
+    """端数は切り上げる（残り29.5秒なら30秒）"""
+    monkeypatch.setenv("DAILY_UPLOAD_LIMIT", "1")
+    _register_and_login(client)
+    with patch("upload_limits._now_jst", return_value=_jst(2026, 10, 30, 23, 59, 30, 500000)):
+        _upload_and_finish(client, db)
+        res = _upload_and_finish(client, db)
+    assert res.headers["Retry-After"] == "30"
+
+
+def test_daily_limit_resets_at_jst_midnight(client, db, monkeypatch):
+    """日本時間で日付が変われば受け付ける（UTC ではまだ前の日の 15:00）"""
+    monkeypatch.setenv("DAILY_UPLOAD_LIMIT", "1")
+    _register_and_login(client)
+    with patch("upload_limits._now_jst", return_value=_jst(2026, 10, 30, 23, 59)):
+        _upload_and_finish(client, db)
+        assert _upload_and_finish(client, db).status_code == 429
+    with patch("upload_limits._now_jst", return_value=_jst(2026, 10, 31, 0, 0)):
+        assert _upload_and_finish(client, db).status_code == 200
+
+
+def test_daily_limit_does_not_count_rejected_files(client, db, monkeypatch):
+    """ファイルの中身で弾かれた分は数えない"""
+    monkeypatch.setenv("DAILY_UPLOAD_LIMIT", "1")
+    _register_and_login(client)
+    assert _upload(client, content=b"not an audio file").status_code == 400
+    assert _upload_and_finish(client, db).status_code == 200
+
+
+def test_daily_limit_is_per_user(client, db, monkeypatch):
+    """ほかのユーザーが上限に達していても、自分は送れる"""
+    monkeypatch.setenv("DAILY_UPLOAD_LIMIT", "1")
+    _register_and_login(client, email="user_a@example.com")
+    _upload_and_finish(client, db)
+    assert _upload_and_finish(client, db).status_code == 429
+    client.post("/api/v1/auth/logout")
+    _register_and_login(client, email="user_b@example.com")
+    assert _upload_and_finish(client, db).status_code == 200
+
+
+def test_daily_count_key_has_expiry(client, db, fake_redis):
+    """回数のキーに掃除用の期限が付いている"""
+    _register_and_login(client)
+    user = db.query(User).first()
+    with patch("upload_limits._now_jst", return_value=_jst(2026, 10, 30, 12, 0)):
+        _upload_and_finish(client, db)
+    assert fake_redis.ttl(f"upload_count:{user.id}:2026-10-30") > 0
 
 
 # ── GET /api/v1/analysis/status/{task_id} ─────────────────────────────────────

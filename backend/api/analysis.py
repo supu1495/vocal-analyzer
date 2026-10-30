@@ -14,7 +14,13 @@ from tasks import analyze_audio_task
 from auth_utils import get_current_user, get_task_owner, save_task_owner
 from database import get_db
 from models import AnalysisResult, User
-from upload_limits import acquire_analysis_slot, release_analysis_slot
+from upload_limits import (
+    acquire_analysis_slot,
+    count_daily_upload,
+    daily_limit_retry_after,
+    daily_upload_limit,
+    release_analysis_slot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +49,21 @@ async def upload_audio(
     - artist_name: アーティスト名（任意）
     - 戻り値: task_id（ステータス確認に使用）
     - 同時に分析できるのは1人1件。分析中なら 429
+    - 1日（日本時間0時区切り）の回数に上限がある。超えたら 429（Retry-After: 次の0時までの秒数）
     """
     _validate_audio_content_type(audio_file)
+
+    retry_after = daily_limit_retry_after(current_user.id)
+    if retry_after is not None:
+        logger.warning(
+            "Upload rejected (daily limit reached): user_id=%d retry_after=%d",
+            current_user.id, retry_after,
+        )
+        raise HTTPException(
+            status_code=429,
+            detail=f"今日のアップロード上限（{daily_upload_limit()}回）に達しました。日本時間の0時以降にお試しください。",
+            headers={"Retry-After": str(retry_after)},
+        )
 
     if not acquire_analysis_slot(current_user.id):
         logger.warning("Upload rejected (analysis in progress): user_id=%d", current_user.id)
@@ -66,6 +85,8 @@ async def upload_audio(
         release_analysis_slot(current_user.id)
         raise
 
+    # 数えるのはタスクに登録できたときだけ（弾かれたファイルは数えない）
+    count_daily_upload(current_user.id)
     save_task_owner(task.id, current_user.id)
     logger.info("Task queued: task_id=%s user_id=%d", task.id, current_user.id)
 
