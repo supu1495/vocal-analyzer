@@ -4557,3 +4557,71 @@ Docker Desktop + WSL の環境では、ホストのファイルやフォルダ�
 ### redis-cli にパスワードを渡す REDISCLI_AUTH
 
 `redis-cli -a パスワード` でもパスワードを渡せるが、コマンドラインにパスワードを書くのは安全でないという警告が出る。`REDISCLI_AUTH` 環境変数に入れておくと、redis-cli はそこからパスワードを読むので警告が出ない。redis コンテナの `environment` に `REDISCLI_AUTH` を渡しておいたので、healthcheck の `redis-cli ping` は書き換えずにそのまま通る。パスワードなしで弾かれることは、`docker compose exec -e REDISCLI_AUTH= redis redis-cli ping` のように空で上書きして確かめた。
+
+---
+
+## 認証まわりの修正（issue #30）
+
+### status の照合
+
+以前は task_id さえ知っていれば、誰でも分析の進み具合を見られた。また、存在しない task_id を渡すと PENDING が返り続け、フロントが10分待ち続けていた。
+
+そこで、アップロード時に「task_id → user_id」を Redis（`task_owner:<task_id>`、24時間）に保存し、status で照合するようにした。他人の task_id も存在しない task_id も、同じ 404 を返す。403 を返すと「その task_id は実在する」と教えてしまうため。
+
+### Cookie を SameSite=Lax にした
+
+`SameSite=None` だと、どのサイトからのリクエストにも Cookie が付くため、他サイトからなりすましでアップロードを送らせることができた。
+
+SameSite の「サイト」はドメインの登録単位（eTLD+1）で決まる。`vocal-analyzer.supu361.dev` と `vocal-api.supu361.dev` は同じ `supu361.dev` なので、Lax でもフロントから API に Cookie が届く。
+
+ログアウトの `delete_cookie` も、発行時と同じ属性（`httponly` / `secure` / `samesite`）で消す。
+
+### hashed_password の初期値 '' をやめた
+
+初期値が空文字だと、パスワードを入れ忘れたユーザーが作れてしまう。初期値をなくし、入れ忘れは保存時にエラーにした。
+
+DB の変更はコードを置くだけでは反映されない。`alembic upgrade head` を実行して初めて反映される。
+
+### 再読み込みしてもログイン制限表示が消えないようにした
+
+制限を実際にかけているのはサーバー（Redis）。画面の「制限中」はブラウザが一時的に覚えているだけで、再読み込みで消えていた（押してもまた 429 なので、安全上の穴ではない）。
+
+サーバーは 429 に `Retry-After`（あと何秒で解除か）を付け、フロントは解除時刻を localStorage に保存して、再読み込み後に読み直す。解除時刻は分単位に切り上げて表示する（「14:32 まで」と出ているのに 14:32 に押せない、というずれを防ぐ）。
+
+### JWT ブラックリスト
+
+ログアウトしても消えるのはブラウザの Cookie だけで、JWT 自体は24時間有効なままだった。
+
+JWT に jti（1枚ごとの ID）を付け、ログアウト時に Redis の無効リスト（`revoked_jti:<jti>`）に載せる。記録はトークンの残りの有効期限で自動的に消える。jti のない古いトークンは拒否する（反映後に一度ログインし直す）。
+
+JWT は「サーバーが覚えていなくても署名で本物と分かる」のが利点。その代わり、途中で無効にするには別の仕組みが要る。
+
+---
+
+## CORS と「本番でだけ壊れる」バグ（issue #30）
+
+画面（vocal-analyzer）と API（vocal-api）はオリジンが違うので、画面から API への fetch は別オリジンになる。
+
+別オリジンの返事では、JS から読めるヘッダーが Content-Type などの決まったものだけに限られる。`Retry-After` は `expose_headers` で許可しないと読めない。
+
+手元（`localhost:5173`）は Vite の proxy で同じオリジンになるので、許可を忘れても動いてしまう。本番でだけ壊れるので、テストでも Origin ヘッダーを付けて別オリジンの条件を再現した。
+
+---
+
+## issue #30 の作業中に出会ったこと
+
+### Redis が止まっているとログインが CORS エラーに見える
+
+Redis が止まっていると、ログインで 500 になり、ブラウザには CORS エラーとして見えた。エラー時の返事には CORS の許可ヘッダーが付かないため。CORS エラーに見えても、本当の原因は別にあることがある。
+
+### Redis のデータはコンテナを作り直すと消える
+
+Redis のデータ（無効リスト・ログイン制限回数・task の持ち主）は、コンテナを作り直すと消える。#32 で対応予定。
+
+### DevTools で Cookie を確かめる
+
+DevTools で Cookie を確かめるときは、Network タブのリクエスト → Headers の `set-cookie` を見るのが確実（Application タブには API 側の Cookie が出ないことがある）。
+
+### スクリーンショットの access_token を隠す
+
+スクリーンショットを共有するときは、access_token の値を隠す。
