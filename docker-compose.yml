@@ -31,6 +31,8 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
       - SECRET_KEY=${SECRET_KEY}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+      - INVITE_CODE=${INVITE_CODE}
+      - DAILY_UPLOAD_LIMIT=${DAILY_UPLOAD_LIMIT:-10}
     depends_on:
       db:
         condition: service_healthy

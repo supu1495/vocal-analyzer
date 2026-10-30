@@ -20,6 +20,7 @@ _SECRET_BYTES = {
     "SECRET_KEY": 32,         # 64文字 = 256bit（RFC 7518 §3.2: HS256 の鍵は 256bit 以上）
     "POSTGRES_PASSWORD": 16,  # 32文字
     "REDIS_PASSWORD": 16,     # 32文字
+    "INVITE_CODE": 16,        # 32文字（総当たりで当てられない長さ）
 }
 
 

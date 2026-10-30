@@ -8,6 +8,7 @@ auth_utils.py がモジュールロード時に os.environ["SECRET_KEY"] を読�
 import os
 
 os.environ.setdefault("SECRET_KEY", "test-secret-key-do-not-use-in-production")
+os.environ.setdefault("INVITE_CODE", "test-invite-code")
 
 import fakeredis
 import pytest
@@ -57,7 +58,7 @@ def fake_redis():
 
     fake_r.eval = fake_eval
 
-    with patch("auth_utils._redis", fake_r):
+    with patch("auth_utils._redis", fake_r), patch("upload_limits._redis", fake_r):
         yield fake_r
 
 
