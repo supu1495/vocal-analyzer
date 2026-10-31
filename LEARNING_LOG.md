@@ -4625,3 +4625,119 @@ DevTools で Cookie を確かめるときは、Network タブのリクエスト 
 ### スクリーンショットの access_token を隠す
 
 スクリーンショットを共有するときは、access_token の値を隠す。
+
+---
+
+## 利用者の限定と使いすぎ対策（issue #29）
+
+### 新規登録を招待コード制にした
+
+許可リスト制は、人を増やすたびに `.env` を書き換えて再起動が要る。招待コードなら、URL と一緒にコードを渡すだけで試してもらえる。
+
+`INVITE_CODE` が空なら誰も登録できない作りにした。設定を忘れても「誰でも登録できる」状態には戻らない。
+
+### 招待コードの比較は hmac.compare_digest を使う
+
+`==` は前から順に比べて、違う文字が見つかった時点で止まる。そのため返事の速さの差から、コードを1文字ずつ当てられてしまう（タイミング攻撃）。`hmac.compare_digest` は最後まで同じ時間をかけて比べる。
+
+`compare_digest` に str を渡すと、全角などの非 ASCII 文字が入ったときに TypeError（500）になる。`.encode()` して bytes 同士で比べる。
+
+### 招待コードの確認は登録処理の最初に行う
+
+確認を後にすると、コードを持たない人にも「このメールは登録済み（409）」を返してしまい、登録済みのメールアドレスを教えることになる。
+
+### 同時実行は1人1件（SET NX EX）
+
+Redis の `SET NX EX`（キーがないときだけ、有効期限付きで書く）で「分析中」の札を立てる。確認と書き込みが1回の命令で済むので、同時に2件送られても両方は通らない。
+
+札は分析の `finally` で外す。worker が強制終了されると `finally` は動かないので、有効期限（20分）で自動的に消えるようにしてある。
+
+### 1日の回数は日付入りのキーで数える
+
+キーは `upload_count:<user_id>:<日本時間の日付>`。日付が変わるとキー名が変わるので、自動的に0回から数え直しになる。
+
+回数を増やす `INCR` と、期限を付ける `EXPIRE` は `pipeline(transaction=True)` でまとめて実行する。途中で止まって、期限のないキーが残るのを防ぐため。
+
+### Retry-After の秒数は切り上げる
+
+切り捨てると、まだ解除されていない時刻を指してしまう。
+
+### Cloudflare のレート制限との役割分担
+
+Cloudflare の無料プランのレート制限は「ルール1つ・IP ごと・10秒数えて10秒止める」だけ。制限の本体はアプリ側で、Cloudflare はログインの総当たり（1つの IP から多くのメールアドレスを試す）を補う役にした。ログイン API（`/api/v1/auth/login`）に、IP ごと10回/10秒でブロックするルールを設定した。
+
+---
+
+## 運用の安定化（issue #32）
+
+### restart: unless-stopped
+
+「自分で止めたとき以外は、落ちても PC を再起動しても自動で起き直す」設定。`always` は、自分で止めても PC の再起動後に起きてくる。
+
+nginx には restart を付けない。80番が Windows 側の別のプログラムとぶつかって起動できないので、付けると失敗と起動を永遠に繰り返す。
+
+### healthy と depends_on
+
+healthy は「起動した」ではなく「健康チェック（healthcheck）に通った」状態。`depends_on` の `condition: service_healthy` は「営業中の札が出るまで待つ」設定。
+
+`depends_on` が効くのは `docker compose up` のときだけ。PC の再起動後に Docker が restart 設定でコンテナを起こすときは、待たずにバラバラに起きる。
+
+### worker を --concurrency=1 にした
+
+未指定だと CPU のコア数（12）ぶんのプロセスが立ち、重い分析が同時に走るとメモリが足りなくなる。
+
+### Redis の永続化（appendonly yes）
+
+Redis に名前付きボリュームと `appendonly yes` を付けた。appendonly は「出来事を1行ずつノートに追記する」保存のしかたで、PC が突然止まっても失うのは最大1秒分。再起動時はノートを読み直して元の状態に戻る。
+
+### cloudflared を本番の PC だけで起動する
+
+cloudflared に `profiles: ["prod"]` を付け、本番の PC の `.env` にだけ `COMPOSE_PROFILES=prod` を書く。同じトンネルに複数の cloudflared がつながると、リクエストは一番近いものに送られ、どれが選ばれるかの保証はない。ノート PC で起動すると、本番のリクエストがノート PC に届いてしまう。
+
+---
+
+## 2026-10-30 の障害（PC 再起動後に本番が 502）
+
+### 何が起きたか
+
+PC のスリープ／シャットダウンで Docker ごと止まり、再起動後は restart 設定のある cloudflared だけが起きた。
+
+別プロジェクトの Valkey（`restart=always`）が先に 6379 番を取り、vocal の redis が起動できなかった。backend と worker は redis の healthy を待つので、起きなかった。
+
+### 対策
+
+override の redis の `ports` を消した。中を見るときは `docker compose exec redis redis-cli` を使えば、ホストにポートを開ける必要はない。ポートを開けなければ、ぶつかる可能性自体がなくなる。
+
+---
+
+## 2台の PC で開発するときの注意
+
+### .env は PC ごとに別物
+
+`.env` は git で共有されない。ノート PC で `INVITE_CODE` を足しても、デスクトップには入らない。
+
+### 本番はデスクトップだけで動かす
+
+本番（cloudflared）はデスクトップだけで動かす。ノート PC の `.env` の `TUNNEL_TOKEN` は空にする。
+
+### Tunnel のトークンをローテートしたとき
+
+ローテートすると、古いトークンを使っている cloudflared は次の起動からつながらない。
+
+新しいトークンは、Cloudflare ダッシュボード → Networking → Tunnels → トンネルを選ぶ → Add a replica で表示されるコマンドの `eyJ...` の部分。コマンド自体は実行しない（実行すると cloudflared がもう1つ増える）。
+
+---
+
+## issue #29・#32 の作業中に出会ったこと
+
+### >> .env の追記が前の行とくっつく
+
+`>> .env` で追記した行が、前の行と改行なしでくっつくことがある（`COMPOSE_PROFILES=prodCOMPOSE_PROFILES=prod` になっていた）。`tail -n 1 .env | cat -A` で見えない文字ごと確認できる（行末は `$`、Windows の改行は `^M` と表示される）。
+
+### gh issue view --comments はコメントしか表示しない
+
+`gh issue view <番号> --comments` は、Claude Code から実行するとコメントしか表示しない。本文（`--comments` なし）と両方読む。
+
+### cloudflared がトンネルにつながったかの確認
+
+cloudflared のログに `Registered tunnel connection` の行が出ていれば、トンネルにつながっている。
