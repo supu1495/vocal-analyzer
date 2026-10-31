@@ -58,6 +58,7 @@ class LoginRequest(BaseModel):
 class AuthResponse(BaseModel):
     user_id: int
     email: str
+    disclaimer_accepted: bool
 
 
 class UserResponse(BaseModel):
@@ -104,7 +105,7 @@ def register(body: RegisterRequest, response: Response, db: Session = Depends(ge
     logger.info("User registered: user_id=%d email=%s", user.id, user.email)
 
     _set_auth_cookie(response, create_access_token(user.id))
-    return AuthResponse(user_id=user.id, email=user.email)
+    return AuthResponse(user_id=user.id, email=user.email, disclaimer_accepted=user.disclaimer_accepted)
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -130,12 +131,29 @@ def login(body: LoginRequest, response: Response, db: Session = Depends(get_db))
     clear_lockout(body.email)
     logger.info("Login success: user_id=%d email=%s", user.id, user.email)
     _set_auth_cookie(response, create_access_token(user.id))
-    return AuthResponse(user_id=user.id, email=user.email)
+    return AuthResponse(user_id=user.id, email=user.email, disclaimer_accepted=user.disclaimer_accepted)
 
 
 @router.get("/me", response_model=UserResponse)
 def me(current_user: User = Depends(get_current_user)):
     """ログイン中のユーザー情報を返す"""
+    return UserResponse(
+        user_id=current_user.id,
+        email=current_user.email,
+        disclaimer_accepted=current_user.disclaimer_accepted,
+    )
+
+
+@router.post("/disclaimer", response_model=UserResponse)
+def accept_disclaimer(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """免責事項への同意を記録する
+
+    同意済みのユーザーがもう一度呼んでも、そのまま 200 を返す（何度呼んでも結果は同じ）
+    """
+    if not current_user.disclaimer_accepted:
+        current_user.disclaimer_accepted = True
+        db.commit()
+        logger.info("Disclaimer accepted: user_id=%d", current_user.id)
     return UserResponse(
         user_id=current_user.id,
         email=current_user.email,

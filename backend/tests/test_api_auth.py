@@ -173,6 +173,44 @@ def test_me_unauthenticated(client):
     assert res.status_code == 401
 
 
+# ── POST /disclaimer ─────────────────────────────────────────────────────────
+
+def test_new_user_has_not_accepted_disclaimer(client):
+    _register(client)
+    assert client.get("/api/v1/auth/me").json()["disclaimer_accepted"] is False
+
+
+def test_accept_disclaimer(client):
+    _register(client)
+    res = client.post("/api/v1/auth/disclaimer")
+    assert res.status_code == 200
+    assert res.json()["disclaimer_accepted"] is True
+    # DB に保存されていれば、次のリクエストの /me でも true になる
+    assert client.get("/api/v1/auth/me").json()["disclaimer_accepted"] is True
+
+
+def test_accept_disclaimer_twice(client):
+    """二度押し・再送でもエラーにしない"""
+    _register(client)
+    client.post("/api/v1/auth/disclaimer")
+    res = client.post("/api/v1/auth/disclaimer")
+    assert res.status_code == 200
+    assert res.json()["disclaimer_accepted"] is True
+
+
+def test_accept_disclaimer_unauthenticated(client):
+    res = client.post("/api/v1/auth/disclaimer")
+    assert res.status_code == 401
+
+
+def test_register_and_login_return_disclaimer_status(client):
+    """フロントがログイン直後に免責事項を出すか決められるよう、同意済みかを返す"""
+    assert _register(client).json()["disclaimer_accepted"] is False
+    client.post("/api/v1/auth/disclaimer")
+    client.post("/api/v1/auth/logout")
+    assert _login(client).json()["disclaimer_accepted"] is True
+
+
 # ── POST /logout ─────────────────────────────────────────────────────────────
 
 def test_logout_clears_cookie(client):

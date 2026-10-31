@@ -5,6 +5,7 @@ export type Screen = 'login' | 'register' | 'upload' | 'result' | 'dashboard'
 export interface AuthState {
   userId: number
   email: string
+  disclaimerAccepted: boolean
 }
 
 export interface AnalysisResult {

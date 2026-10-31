@@ -108,7 +108,7 @@ export function AuthScreen({
         return
       }
       if (!res.ok) throw new Error(data.detail ?? 'エラーが発生しました。')
-      onSuccess({ userId: data.user_id, email: data.email })
+      onSuccess({ userId: data.user_id, email: data.email, disclaimerAccepted: data.disclaimer_accepted })
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'エラーが発生しました。')
     } finally {
