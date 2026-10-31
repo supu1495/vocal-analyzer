@@ -33,11 +33,14 @@ def _create_minimal_wav() -> bytes:
     return buf.getvalue()
 
 
-def _register_and_login(client, email="test@example.com", password="password123"):
+def _register_and_login(client, email="test@example.com", password="password123", accept_disclaimer=True):
+    """登録してログイン状態にする。accept_disclaimer=True なら免責事項にも同意する（アップロードできる状態）"""
     client.post(
         "/api/v1/auth/register",
         json={"email": email, "password": password, "invite_code": os.environ["INVITE_CODE"]},
     )
+    if accept_disclaimer:
+        client.post("/api/v1/auth/disclaimer")
 
 
 def _upload(client, filename="test.wav", content_type="audio/wav", content=None):
@@ -96,6 +99,34 @@ def test_upload_success(client):
     assert res.status_code == 200
     assert res.json()["task_id"] == "test-task-id"
     assert res.json()["status"] == "processing"
+
+
+def test_upload_rejected_without_disclaimer(client):
+    """免責事項に同意していなければ、タスクに登録せず 403"""
+    _register_and_login(client, accept_disclaimer=False)
+    with patch("api.analysis.analyze_audio_task.delay") as mock_delay:
+        res = _upload(client)
+    assert res.status_code == 403
+    mock_delay.assert_not_called()
+
+
+def test_upload_without_disclaimer_is_not_counted(client, fake_redis):
+    """未同意で弾いた分は、1日の回数に数えず、分析中の印も付けない"""
+    _register_and_login(client, accept_disclaimer=False)
+    _upload(client)
+    assert fake_redis.keys("upload_count:*") == []
+    assert fake_redis.keys("active_task:*") == []
+
+
+def test_upload_allowed_after_accepting_disclaimer(client):
+    """未同意で弾かれても、同意すればアップロードできる"""
+    _register_and_login(client, accept_disclaimer=False)
+    assert _upload(client).status_code == 403
+    client.post("/api/v1/auth/disclaimer")
+    mock_task = MagicMock()
+    mock_task.id = "test-task-id"
+    with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task):
+        assert _upload(client).status_code == 200
 
 
 def test_upload_rejected_while_analysis_in_progress(client):

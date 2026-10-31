@@ -4,6 +4,7 @@ import { AuthScreen } from './screens/AuthScreen'
 import { UploadScreen } from './screens/UploadScreen'
 import { ResultScreen } from './screens/ResultScreen'
 import { DashboardScreen } from './screens/DashboardScreen'
+import { DisclaimerScreen } from './screens/DisclaimerScreen'
 
 const AUTH_HINT_KEY = 'vocal-analyzer-auth-hint'
 
@@ -19,7 +20,7 @@ export default function App() {
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data) {
-          setAuth({ userId: data.user_id, email: data.email })
+          setAuth({ userId: data.user_id, email: data.email, disclaimerAccepted: data.disclaimer_accepted })
           setScreen('upload')
         } else {
           localStorage.removeItem(AUTH_HINT_KEY)
@@ -49,7 +50,13 @@ export default function App() {
     setScreen('result')
   }
 
+  const handleDisclaimerAccepted = () => {
+    setAuth(current => current && { ...current, disclaimerAccepted: true })
+  }
+
   const isAuthScreen = screen === 'login' || screen === 'register'
+  // 未同意のあいだは、どの画面を選んでも免責事項を出す（backend も未同意の upload を 403 で拒否する）
+  const needsDisclaimer = auth !== null && !auth.disclaimerAccepted && !isAuthScreen
 
   return (
     <div style={{ minHeight: '100vh', background: '#080812', color: 'white', fontFamily: "'Noto Sans JP', 'Hiragino Sans', sans-serif" }}>
@@ -83,11 +90,12 @@ export default function App() {
       <main>
         {screen === 'login' && <AuthScreen mode="login" onSuccess={handleAuthSuccess} onToggle={() => setScreen('register')} />}
         {screen === 'register' && <AuthScreen mode="register" onSuccess={handleAuthSuccess} onToggle={() => setScreen('login')} />}
-        {screen === 'upload' && auth && <UploadScreen onResult={handleResult} />}
-        {screen === 'result' && auth && analysisResult && (
+        {needsDisclaimer && <DisclaimerScreen onAccepted={handleDisclaimerAccepted} />}
+        {!needsDisclaimer && screen === 'upload' && auth && <UploadScreen onResult={handleResult} />}
+        {!needsDisclaimer && screen === 'result' && auth && analysisResult && (
           <ResultScreen result={analysisResult} onBack={() => setScreen('upload')} onDashboard={() => setScreen('dashboard')} />
         )}
-        {screen === 'dashboard' && auth && (
+        {!needsDisclaimer && screen === 'dashboard' && auth && (
           <DashboardScreen latestResult={analysisResult} onBack={() => setScreen(analysisResult ? 'result' : 'upload')} />
         )}
       </main>

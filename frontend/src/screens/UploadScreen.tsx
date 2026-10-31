@@ -186,6 +186,9 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
       }}>
         {loading ? '分析中...' : '分析を開始する →'}
       </button>
+      <p style={{ color: '#555', fontSize: '12px', textAlign: 'center', marginTop: '12px' }}>
+        録音ファイルは分析後すぐに削除され、保存されません。
+      </p>
     </div>
   )
 }

@@ -50,7 +50,13 @@ async def upload_audio(
     - 戻り値: task_id（ステータス確認に使用）
     - 同時に分析できるのは1人1件。分析中なら 429
     - 1日（日本時間0時区切り）の回数に上限がある。超えたら 429（Retry-After: 次の0時までの秒数）
+    - 免責事項に同意していなければ 403
     """
+    # フロントで免責事項を出すだけだと API を直接呼べば通るので、ここでも確かめる
+    if not current_user.disclaimer_accepted:
+        logger.warning("Upload rejected (disclaimer not accepted): user_id=%d", current_user.id)
+        raise HTTPException(status_code=403, detail="利用を始める前に、免責事項への同意が必要です。")
+
     _validate_audio_content_type(audio_file)
 
     retry_after = daily_limit_retry_after(current_user.id)
