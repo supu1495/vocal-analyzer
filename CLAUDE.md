@@ -99,10 +99,16 @@
 
 ## 現在の状態
 
-- **作業ブランチ**: `main`。以降は issue ごとにブランチを切る
-- **mainブランチ**: Phase 10 準備・Phase 10a（healthcheck・ログローテーション・cloudflared サービス追加。GPU化は見送り）までマージ済み（2026-10-19）
-- **ローカル動作確認**: Docker Compose で全6サービス起動確認済み（healthcheck・ログローテーション設定済み）
-- **本番動作確認**: CF Pages + CF Tunnel で動作確認済み
+- **作業の進め方**: issue ごとにブランチを切る。進捗は GitHub issue を正とする（#28・#41・#30・#32・#29・#19 は完了。#31 は移行で警告の帯が消えたのを確かめてから手で閉じる）
+- **本番の構成**
+  - フロント：Cloudflare Workers（静的アセット。`wrangler.jsonc`）。main に push すると自動でビルド・配信される
+  - API：CF Tunnel → デスクトップの `~/works/vocal-analyzer-prod`（main 専用。`docker-compose.yml` だけで起動。コードはイメージに焼き込み・ポート公開なし）
+  - backend の更新：本番用フォルダで `scripts/deploy_backend.sh`（手動）。フロントと backend のコミットがずれると画面上部に黄色い帯が出る
+- **PC 2台の役割**
+  - デスクトップ：本番（`~/works/vocal-analyzer-prod`、プロジェクト名 `vocal-analyzer`）と開発（`~/works/vocal-analyzer`、プロジェクト名 `vocal-dev`）を同時に動かす
+  - ノートPC：開発だけ（プロジェクト名 `vocal-dev`）。cloudflared は動かさない
+  - 開発は `.env` の `COMPOSE_FILE` で `docker-compose.dev.yml` を重ねる。詳細・移行手順は `docs/DEPLOY.md`
+- **注意**: #31 のマージ後の移行（`docs/DEPLOY.md`「移行」）が済むまで、デスクトップの開発フォルダのプロジェクト名は `vocal-analyzer`（本番と同じ）のまま。そこで docker compose の up / down / restart / exec をしない
 - **注意**: port 80 はホスト側の Apache が競合する場合あり。その場合は `http://localhost:5173` に直接アクセス（Viteの proxy 設定で `/api/*` は backend に転送される）
 
 ---
@@ -247,7 +253,7 @@ vocal-analyzer/
 │   └── gen_secrets.py                   # .env の秘密情報を生成する
 ├── .gitignore
 ├── nginx/default.conf                   # nginxリバースプロキシ設定
-├── wrangler.jsonc                       # CF Pages のデプロイ設定
+├── wrangler.jsonc                       # Cloudflare Workers（フロントの静的アセット配信）のデプロイ設定
 ├── backend/
 │   ├── main.py                      # FastAPIアプリ本体（CORS は環境変数から読み込み）
 │   ├── database.py                  # SQLAlchemy接続・get_db()

@@ -205,6 +205,8 @@ curl http://localhost:8080/health                  # {"status":"ok","commit":"de
    docker compose -p <今のプロジェクト名> down --remove-orphans
    ```
 
+   **`-v` は付けない。** `-v` を付けると volume（DB・Redis のデータ）まで消える。止めるのはコンテナだけにする
+
 2. `.env` に次の2行を足す（`COMPOSE_PROFILES` は空のまま）
 
    ```
