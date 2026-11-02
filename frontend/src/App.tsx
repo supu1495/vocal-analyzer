@@ -5,6 +5,7 @@ import { UploadScreen } from './screens/UploadScreen'
 import { ResultScreen } from './screens/ResultScreen'
 import { DashboardScreen } from './screens/DashboardScreen'
 import { DisclaimerScreen } from './screens/DisclaimerScreen'
+import { VersionWarning } from './components/VersionWarning'
 
 const AUTH_HINT_KEY = 'vocal-analyzer-auth-hint'
 
@@ -60,6 +61,7 @@ export default function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#080812', color: 'white', fontFamily: "'Noto Sans JP', 'Hiragino Sans', sans-serif" }}>
+      <VersionWarning />
       <header style={{ borderBottom: '1px solid #0d0d1a', padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span
           onClick={() => auth && setScreen('upload')}
