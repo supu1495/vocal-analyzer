@@ -20,6 +20,9 @@ services:
       - "127.0.0.1:8080:8000"
     volumes:
       - ./backend:/app
+    environment:
+      # 動いているのはイメージのコードではなく作業中のファイルなので、/health ではコミットIDの代わりに dev と返す
+      - GIT_COMMIT=dev
 
   celery_worker:
     # --reload はないので、コードの変更は docker compose restart celery_worker で反映する

@@ -51,4 +51,6 @@ def root():
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    # commit: このイメージをビルドしたコミットの ID（Dockerfile の GIT_COMMIT）
+    # フロントは自分のビルド元のコミットと比べ、違っていたら画面に警告を出す
+    return {"status": "ok", "commit": os.environ.get("GIT_COMMIT", "unknown")}

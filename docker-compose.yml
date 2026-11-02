@@ -15,6 +15,9 @@ services:
   backend:
     build:
       context: ./backend
+      args:
+        # シェルの GIT_COMMIT を Dockerfile に渡す。渡さなければ unknown（フロントに警告が出る）
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
     volumes:
       - vocal_uploads:/tmp/vocal_analyzer
     environment:
