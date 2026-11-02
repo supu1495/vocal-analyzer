@@ -230,7 +230,7 @@ Phase 10準備 → 10a(GPU) → 10b(精度) → 10c(D1) → Phase 11 → Phase 1
 - **Cloudflare のレート制限（error code 1015）**: 短時間に大量のリクエストを送ると Cloudflare 側で弾かれる。通常の操作では起きない
 - ※ 「ページを再読み込みするとログイン制限中の表示が消える」は直す対象（issue #30）
 
-運用コマンド（起動・ログ・DB操作・テスト・デバッグ）は `docs/DEPLOY.md`（issue #31 で作成）にまとめる
+backend の更新手順・本番と開発の分け方・運用コマンド（起動・ログ・DB操作・テスト・デバッグ）は `docs/DEPLOY.md` を参照（issue #31）。本番は `~/works/vocal-analyzer-prod`、開発は `~/works/vocal-analyzer` から動かす
 
 ---
 
@@ -238,9 +238,13 @@ Phase 10準備 → 10a(GPU) → 10b(精度) → 10c(D1) → Phase 11 → Phase 1
 
 ```
 vocal-analyzer/
-├── docker-compose.yml                   # 本番・開発共通の構成
-├── docker-compose.override.yml          # ローカル開発専用の上書き（gitignore対象）
+├── docker-compose.yml                   # 本番の構成（コードはイメージに焼き込み・ポート公開なし）
+├── docker-compose.dev.yml               # 開発用の追加設定（コードの mount・--reload・ポート公開・frontend / nginx）
 ├── .env.example                         # 環境変数のテンプレート（実際の値は .env に書く）
+├── docs/DEPLOY.md                       # backend の更新手順・本番と開発の分け方・運用コマンド
+├── scripts/
+│   ├── deploy_backend.sh                # 本番の backend を main の最新に更新する（本番用フォルダで実行）
+│   └── gen_secrets.py                   # .env の秘密情報を生成する
 ├── .gitignore
 ├── nginx/default.conf                   # nginxリバースプロキシ設定
 ├── wrangler.jsonc                       # CF Pages のデプロイ設定
@@ -250,7 +254,7 @@ vocal-analyzer/
 │   ├── models.py                    # DBモデル（User / AnalysisResult）
 │   ├── celery_app.py                # Celeryアプリ設定（Broker: Redis DB0 / Backend: Redis DB1）
 │   ├── tasks.py                     # Celeryタスク（analyze_audio_task）
-│   ├── Dockerfile                   # uvicorn を --reload なしで起動（override で復活）
+│   ├── Dockerfile                   # uvicorn を --reload なしで起動（dev.yml で復活）。GIT_COMMIT を焼き込む
 │   ├── requirements.txt
 │   ├── alembic.ini
 │   ├── alembic/
