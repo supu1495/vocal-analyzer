@@ -1,0 +1,61 @@
+# 開発用の追加設定。docker-compose.yml に重ねて読む
+# 開発フォルダの .env に次の2行を書くと、docker compose が自動でこのファイルも読む:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml
+#   COMPOSE_PROJECT_NAME=vocal-dev   （本番の vocal-analyzer と volume・コンテナを分けるため）
+# 本番用フォルダの .env には書かない。scripts/deploy_backend.sh はこのファイルが読まれる設定だと止まる
+# 秘密はここに書かず、docker-compose.yml と同じく .env から読む
+
+# ログローテーション共通設定（YAML のアンカーはファイルをまたげないため、ここでも定義する）
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  backend:
+    # 保存したら自動で再起動する（--reload）。コードは mount した ./backend を使う
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "127.0.0.1:8080:8000"
+    volumes:
+      - ./backend:/app
+
+  celery_worker:
+    # --reload はないので、コードの変更は docker compose restart celery_worker で反映する
+    volumes:
+      - ./backend:/app
+
+  # DB をホストに公開する（psql / pgAdmin などから接続するため）
+  db:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  # Redis はホストに公開しない。6379 は別プロジェクトの Valkey（restart=always）と競合し、
+  # PC 再起動後に redis が起動できなくなったため（2026-10-30）
+  # 中身を見るときは: docker compose exec redis redis-cli
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "127.0.0.1:5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    restart: unless-stopped
+    logging: *default-logging
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "127.0.0.1:80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - frontend
+      - backend
+    # restart は付けない。ホストの Apache などが 80 番を使っていると起動に失敗し、再起動を繰り返すため
+    logging: *default-logging

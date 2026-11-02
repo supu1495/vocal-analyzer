@@ -1,3 +1,9 @@
+# 本番の構成（このファイルだけで起動すると本番になる）
+# - コードはイメージに焼き込んだものを使う（./backend を mount しない）。保存しただけでは変わらない
+# - ホストにポートを公開しない。外からは cloudflared → http://backend:8000 だけでつながる
+# - 画面は Cloudflare から配るので frontend / nginx は持たない
+# 開発では docker-compose.dev.yml を重ねて読む（.env の COMPOSE_FILE で指定する。docs/DEPLOY.md 参照）
+
 # ログローテーション共通設定: 1ファイル最大10MB × 3世代まで保持し、それ以上は古いものから削除
 x-logging: &default-logging
   driver: json-file
@@ -6,26 +12,10 @@ x-logging: &default-logging
     max-file: "3"
 
 services:
-  frontend:
-    build:
-      context: ./frontend
-    ports:
-      - "127.0.0.1:5173:5173"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    depends_on:
-      - backend
-    restart: unless-stopped
-    logging: *default-logging
-
   backend:
     build:
       context: ./backend
-    ports:
-      - "127.0.0.1:8080:8000"
     volumes:
-      - ./backend:/app
       - vocal_uploads:/tmp/vocal_analyzer
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
@@ -55,7 +45,6 @@ services:
     # 未指定（CPU コア数ぶん）だと同時に複数来たときにメモリが足りなくなる
     command: celery -A celery_app worker --loglevel=info --concurrency=1
     volumes:
-      - ./backend:/app
       - vocal_uploads:/tmp/vocal_analyzer
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
@@ -109,19 +98,6 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
-    logging: *default-logging
-
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "127.0.0.1:80:80"
-    volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
-    depends_on:
-      - frontend
-      - backend
-    # restart は付けない。ホストの Apache などが 80 番を使っていると起動に失敗し、再起動を繰り返すため
-    # 本番は cloudflared → backend で直接つながっており、nginx が止まっていても影響しない
     logging: *default-logging
 
   cloudflared:
