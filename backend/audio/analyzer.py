@@ -3,7 +3,7 @@
 separator・pitch・techniquesを組み合わせて分析結果を生成する
 """
 
-import contextlib  # with で囲んだ段階の所要時間を測る関数（_stage）を短く書くために使用
+import contextlib  # with で囲んだ段階の所要時間を測る関数（stage）を短く書くために使用
 import logging
 import time
 
@@ -23,7 +23,7 @@ _VOICED_CONFIDENCE_THRESHOLD = 0.5
 
 
 @contextlib.contextmanager
-def _stage(name: str):
+def stage(name: str):
     """分析の1段階を囲み、所要時間をログに出す。例外が出たらどの段階で落ちたかを出す
 
     スタックトレースは tasks.py の logger.exception で出すため、ここでは段階名と時間だけにする（二重に出さない）
@@ -71,11 +71,11 @@ class AudioAnalyzer:
             }
         """
         # 音源分離：ボーカル・ドラム・ベース・その他に分離
-        with _stage("separate"):
+        with stage("separate"):
             separated_tracks = self.separator.separate(audio_path)
 
         # ボーカルトラックからピッチを検出
-        with _stage("pitch"):
+        with stage("pitch"):
             pitch_data = self.pitch_detector.detect(separated_tracks["vocals"])
             # 声が無いまま進むと、意味のないスコアを返してしまうため失敗にする
             # 要確認: 今は「1フレームも無い」ときだけ。実音声で「何秒未満なら失敗」にするか調整する
@@ -83,10 +83,10 @@ class AudioAnalyzer:
                 raise AnalysisError(NO_VOICE, "no voiced frames")
 
         # ピッチデータから歌唱技法を検出
-        with _stage("techniques"):
+        with stage("techniques"):
             detected_techniques = self.technique_detector.detect_all(pitch_data)
 
-        with _stage("scoring"):
+        with stage("scoring"):
             # 声域（最低音〜最高音）を計算
             vocal_range = self._calculate_vocal_range(pitch_data)
 

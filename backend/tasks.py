@@ -12,7 +12,7 @@ from celery.exceptions import SoftTimeLimitExceeded  # 時間切れ（soft time 
 from celery_app import celery_app
 from audio.errors import INTERNAL, TIMEOUT, AnalysisError
 from database import SessionLocal
-from audio.analyzer import AudioAnalyzer
+from audio.analyzer import AudioAnalyzer, stage
 from models import AnalysisResult
 from task_failures import save_failure_reason
 from upload_limits import release_analysis_slot
@@ -25,9 +25,18 @@ _audio_analyzer: AudioAnalyzer | None = None
 
 
 def _get_analyzer() -> AudioAnalyzer:
+    """分析器を返す。初回はモデル（Demucs）を読み込む。キャッシュが無ければダウンロードも行う
+
+    読み込み中の時間切れは、録音のせいではなくサーバー側の原因なので internal として扱う
+    （timeout のままだと、利用者に「短い録音で試してください」と出てしまう）
+    """
     global _audio_analyzer
     if _audio_analyzer is None:
-        _audio_analyzer = AudioAnalyzer()
+        try:
+            with stage("load_model"):
+                _audio_analyzer = AudioAnalyzer()
+        except SoftTimeLimitExceeded as e:
+            raise AnalysisError(INTERNAL, "time limit exceeded while loading model") from e
     return _audio_analyzer
 
 

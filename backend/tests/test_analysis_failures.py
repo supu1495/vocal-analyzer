@@ -6,6 +6,7 @@
 - tasks.py：例外から理由を決めて Redis に記録する
 """
 
+import logging
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -100,3 +101,24 @@ def test_task_saves_failure_reason(fake_redis, tmp_path, error, expected_reason)
 
     assert result.failed()
     assert get_failure_reason("failed-task-id") == expected_reason
+
+
+def test_task_treats_timeout_while_loading_model_as_internal(fake_redis, tmp_path, caplog):
+    """モデルの読み込み（ダウンロード）中の時間切れは、録音のせいではないので internal にする"""
+    from tasks import analyze_audio_task
+
+    audio_path = tmp_path / "test.wav"
+    audio_path.write_bytes(b"dummy")
+
+    # _audio_analyzer を None にして「初回の読み込み」を起こす
+    with patch("tasks._audio_analyzer", None), \
+            patch("tasks.AudioAnalyzer", side_effect=SoftTimeLimitExceeded()), \
+            patch("tasks.SessionLocal"), \
+            caplog.at_level(logging.INFO):
+        result = analyze_audio_task.apply(
+            args=(str(audio_path), "", "", 1), task_id="load-timeout-task-id",
+        )
+
+    assert result.failed()
+    assert get_failure_reason("load-timeout-task-id") == INTERNAL
+    assert "Stage failed: stage=load_model" in caplog.text
