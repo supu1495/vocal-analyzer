@@ -3,6 +3,7 @@
 separator・pitch・techniquesを組み合わせて分析結果を生成する
 """
 
+import contextlib  # with で囲んだ段階の所要時間を測る関数（stage）を短く書くために使用
 import logging
 import time
 
@@ -10,11 +11,35 @@ import numpy as np  # 周波数配列のフィルタリングと最小・最大�
 import librosa  # hz_to_midi・midi_to_note による周波数→ノート名変換に使用
 from librosa.onset import onset_detect  # 発声タイミング検出（librosa.onset.onset_detectの重複を避けるため個別import）
 
+from audio.errors import NO_VOICE, AnalysisError
 from audio.separator import VocalSeparator
 from audio.pitch import PitchDetector
 from audio.techniques import TechniqueDetector
 
 logger = logging.getLogger(__name__)
+
+# Crepe の信頼度がこれを超えるフレームを「声がある」とみなす（声域の計算と同じ基準）
+_VOICED_CONFIDENCE_THRESHOLD = 0.5
+
+
+@contextlib.contextmanager
+def stage(name: str):
+    """分析の1段階を囲み、所要時間をログに出す。例外が出たらどの段階で落ちたかを出す
+
+    スタックトレースは tasks.py の logger.exception で出すため、ここでは段階名と時間だけにする（二重に出さない）
+    """
+    start = time.time()
+    try:
+        yield
+    except Exception:
+        logger.error("Stage failed: stage=%s elapsed=%.2fs", name, time.time() - start)
+        raise
+    logger.info("Stage finished: stage=%s elapsed=%.2fs", name, time.time() - start)
+
+
+def _has_voice(pitch_data: dict) -> bool:
+    """信頼度が基準を超えるフレームが1つでもあれば True"""
+    return any(c > _VOICED_CONFIDENCE_THRESHOLD for c in pitch_data["confidence"])
 
 
 class AudioAnalyzer:
@@ -46,38 +71,40 @@ class AudioAnalyzer:
             }
         """
         # 音源分離：ボーカル・ドラム・ベース・その他に分離
-        t0 = time.time()
-        separated_tracks = self.separator.separate(audio_path)
-        logger.debug("Separator finished: %.2fs", time.time() - t0)
+        with stage("separate"):
+            separated_tracks = self.separator.separate(audio_path)
 
         # ボーカルトラックからピッチを検出
-        t1 = time.time()
-        pitch_data = self.pitch_detector.detect(separated_tracks["vocals"])
-        logger.debug("Pitch detection finished: %.2fs", time.time() - t1)
+        with stage("pitch"):
+            pitch_data = self.pitch_detector.detect(separated_tracks["vocals"])
+            # 声が無いまま進むと、意味のないスコアを返してしまうため失敗にする
+            # 要確認: 今は「1フレームも無い」ときだけ。実音声で「何秒未満なら失敗」にするか調整する
+            if not _has_voice(pitch_data):
+                raise AnalysisError(NO_VOICE, "no voiced frames")
 
         # ピッチデータから歌唱技法を検出
-        t2 = time.time()
-        detected_techniques = self.technique_detector.detect_all(pitch_data)
-        logger.debug("Technique detection finished: %.2fs", time.time() - t2)
+        with stage("techniques"):
+            detected_techniques = self.technique_detector.detect_all(pitch_data)
 
-        # 声域（最低音〜最高音）を計算
-        vocal_range = self._calculate_vocal_range(pitch_data)
+        with stage("scoring"):
+            # 声域（最低音〜最高音）を計算
+            vocal_range = self._calculate_vocal_range(pitch_data)
 
-        # ピッチ正確性とリズム感のスコアを計算
-        pitch_accuracy = self.pitch_detector.calculate_accuracy(pitch_data, {})
-        rhythm_score = self._calculate_rhythm_score(
-            separated_tracks["vocals"], separated_tracks["sample_rate"]
-        )
+            # ピッチ正確性とリズム感のスコアを計算
+            pitch_accuracy = self.pitch_detector.calculate_accuracy(pitch_data, {})
+            rhythm_score = self._calculate_rhythm_score(
+                separated_tracks["vocals"], separated_tracks["sample_rate"]
+            )
 
-        # スコアマトリクス（基本忠実度・技法スコア・不自然さペナルティ・総合スコア）を計算
-        score_matrix = self._calculate_score_matrix(
-            pitch_data, detected_techniques, pitch_accuracy, rhythm_score
-        )
+            # スコアマトリクス（基本忠実度・技法スコア・不自然さペナルティ・総合スコア）を計算
+            score_matrix = self._calculate_score_matrix(
+                pitch_data, detected_techniques, pitch_accuracy, rhythm_score
+            )
 
-        # スコアと技法データをもとにフィードバックを生成
-        feedback = self._generate_feedback(
-            pitch_accuracy, rhythm_score, detected_techniques, score_matrix
-        )
+            # スコアと技法データをもとにフィードバックを生成
+            feedback = self._generate_feedback(
+                pitch_accuracy, rhythm_score, detected_techniques, score_matrix
+            )
 
         return {
             "pitch_accuracy": pitch_accuracy,
@@ -93,7 +120,7 @@ class AudioAnalyzer:
         frequencies = np.array(pitch_data["frequencies"])
         confidence = np.array(pitch_data["confidence"])
 
-        confident_frequencies = frequencies[confidence > 0.5]
+        confident_frequencies = frequencies[confidence > _VOICED_CONFIDENCE_THRESHOLD]
         if len(confident_frequencies) == 0:
             return {"lowest": None, "highest": None, "range_semitones": 0}
 

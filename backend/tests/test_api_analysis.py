@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 from auth_utils import get_task_owner, save_task_owner
 from models import AnalysisResult, User
+from task_failures import save_failure_reason
 from upload_limits import release_analysis_slot
 
 
@@ -337,6 +338,37 @@ def test_get_analysis_status_pending(client, db):
         res = client.get("/api/v1/analysis/status/some-task-id")
     assert res.status_code == 200
     assert res.json()["status"] == "PENDING"
+
+
+def test_get_analysis_status_failure_returns_reason(client, db):
+    _register_and_login(client)
+    user = db.query(User).first()
+    save_task_owner("some-task-id", user.id)
+    save_failure_reason("some-task-id", "no_voice")
+    with patch("api.analysis.celery_app.AsyncResult") as mock_async_result:
+        mock_async_result.return_value.status = "FAILURE"
+        res = client.get("/api/v1/analysis/status/some-task-id")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "FAILURE"
+    assert body["reason"] == "no_voice"
+    assert "歌声を検出できませんでした" in body["detail"]
+
+
+def test_get_analysis_status_failure_without_reason_returns_internal(client, db):
+    # worker が強制終了されると理由が記録されないため、internal として返す
+    _register_and_login(client)
+    user = db.query(User).first()
+    save_task_owner("some-task-id", user.id)
+    with patch("api.analysis.celery_app.AsyncResult") as mock_async_result:
+        mock_async_result.return_value.status = "FAILURE"
+        res = client.get("/api/v1/analysis/status/some-task-id")
+    assert res.status_code == 200
+    assert res.json() == {
+        "status": "FAILURE",
+        "reason": "internal",
+        "detail": "分析中にエラーが発生しました。",
+    }
 
 
 def test_get_analysis_status_unknown_task_returns_404(client):

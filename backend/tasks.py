@@ -7,10 +7,14 @@ import logging
 import os
 import time
 
+from celery.exceptions import SoftTimeLimitExceeded  # 時間切れ（soft time limit）を失敗理由 timeout に分けるため
+
 from celery_app import celery_app
+from audio.errors import INTERNAL, TIMEOUT, AnalysisError
 from database import SessionLocal
-from audio.analyzer import AudioAnalyzer
+from audio.analyzer import AudioAnalyzer, stage
 from models import AnalysisResult
+from task_failures import save_failure_reason
 from upload_limits import release_analysis_slot
 
 logger = logging.getLogger(__name__)
@@ -21,14 +25,25 @@ _audio_analyzer: AudioAnalyzer | None = None
 
 
 def _get_analyzer() -> AudioAnalyzer:
+    """分析器を返す。初回はモデル（Demucs）を読み込む。キャッシュが無ければダウンロードも行う
+
+    読み込み中の時間切れは、録音のせいではなくサーバー側の原因なので internal として扱う
+    （timeout のままだと、利用者に「短い録音で試してください」と出てしまう）
+    """
     global _audio_analyzer
     if _audio_analyzer is None:
-        _audio_analyzer = AudioAnalyzer()
+        try:
+            with stage("load_model"):
+                _audio_analyzer = AudioAnalyzer()
+        except SoftTimeLimitExceeded as e:
+            raise AnalysisError(INTERNAL, "time limit exceeded while loading model") from e
     return _audio_analyzer
 
 
-@celery_app.task
+# bind=True: 1つ目の引数（self）からこのタスク自身の task_id を取れるようにする（失敗理由の記録に使う）
+@celery_app.task(bind=True)
 def analyze_audio_task(
+    self,
     tmp_path: str,
     song_title: str,
     artist_name: str,
@@ -76,11 +91,17 @@ def analyze_audio_task(
             user_id, record.id, elapsed,
         )
         return record.id
-    except Exception:
+    except Exception as e:
         # commit 前後で例外が出てもセッションを安全な状態に戻す
         db.rollback()
         elapsed = time.time() - start
-        logger.exception("Task failed: user_id=%d elapsed=%.2fs", user_id, elapsed)
+        reason = _classify_failure(e)
+        logger.exception(
+            "Task failed: user_id=%d reason=%s elapsed=%.2fs", user_id, reason, elapsed,
+        )
+        # タスクを直接呼んだとき（テストなど）は task_id が無いので記録しない
+        if self.request.id is not None:
+            save_failure_reason(self.request.id, reason)
         raise
     finally:
         # 著作権保護のため分析完了後に即時削除する
@@ -89,3 +110,16 @@ def analyze_audio_task(
         db.close()
         # 次のアップロードを受け付けられるようにする
         release_analysis_slot(user_id)
+
+
+def _classify_failure(error: Exception) -> str:
+    """例外から失敗理由（audio/errors.py の値）を決める
+
+    hard time limit（task_time_limit）で強制終了されたときはここまで来ないため、理由は記録されない
+    （status API では internal として返す）
+    """
+    if isinstance(error, AnalysisError):
+        return error.reason
+    if isinstance(error, SoftTimeLimitExceeded):
+        return TIMEOUT
+    return INTERNAL

@@ -9,7 +9,9 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
+from audio.errors import INTERNAL, INVALID_FORMAT, NO_VOICE, TIMEOUT
 from celery_app import celery_app
+from task_failures import get_failure_reason
 from tasks import analyze_audio_task
 from auth_utils import get_current_user, get_task_owner, save_task_owner
 from database import get_db
@@ -32,6 +34,14 @@ _UPLOAD_DIR = "/tmp/vocal_analyzer"
 # アップロード上限とストリーミング読み込みのチャンクサイズ
 _MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 _CHUNK_SIZE = 1024 * 1024           # 1MB
+
+# 分析が失敗したときに利用者に見せる文言（reason は audio/errors.py）
+_FAILURE_MESSAGES = {
+    INVALID_FORMAT: "音声ファイルを読み込めませんでした。別の形式で試してください。",
+    NO_VOICE: "歌声を検出できませんでした。歌声が入った録音か確かめてください。",
+    TIMEOUT: "分析に時間がかかりすぎたため中止しました。短い録音で試してください。",
+    INTERNAL: "分析中にエラーが発生しました。",
+}
 
 
 @router.post("/upload")
@@ -79,8 +89,8 @@ async def upload_audio(
         )
 
     logger.info(
-        "Upload received: user_id=%d filename=%s content_type=%s",
-        current_user.id, audio_file.filename, audio_file.content_type,
+        "Upload received: user_id=%d extension=%s content_type=%s",
+        current_user.id, _file_extension(audio_file), audio_file.content_type,
     )
 
     try:
@@ -112,6 +122,7 @@ def get_analysis_status(
 
     - task_id: アップロード時に返された task_id
     - 戻り値: status（PENDING / SUCCESS / FAILURE）と analysis_id（完了時のみ）
+    - 失敗時は reason（invalid_format / no_voice / timeout / internal）と、利用者向けの detail も返す
     - 本人のタスクでなければ 404（他人のタスク・存在しないタスクを区別せず、存在を推測させない）
     """
     owner_id = get_task_owner(task_id)
@@ -130,7 +141,11 @@ def get_analysis_status(
         return {"status": "SUCCESS", "analysis_id": result.result}
 
     if result.status == "FAILURE":
-        return {"status": "FAILURE", "detail": "分析中にエラーが発生しました。"}
+        # 記録が無い（worker の強制終了など）・知らない値のときは internal として返す
+        reason = get_failure_reason(task_id)
+        if reason not in _FAILURE_MESSAGES:
+            reason = INTERNAL
+        return {"status": "FAILURE", "reason": reason, "detail": _FAILURE_MESSAGES[reason]}
 
     return {"status": result.status}
 
@@ -222,13 +237,18 @@ def _validate_audio_content_type(audio_file: UploadFile) -> None:
     allowed_types = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/x-m4a"]
     if audio_file.content_type not in allowed_types:
         logger.warning(
-            "Upload rejected (invalid content-type): filename=%s content_type=%s",
-            audio_file.filename, audio_file.content_type,
+            "Upload rejected (invalid content-type): extension=%s content_type=%s",
+            _file_extension(audio_file), audio_file.content_type,
         )
         raise HTTPException(
             status_code=400,
             detail="対応していないファイル形式です。WAV/MP3/M4Aのみ対応しています。",
         )
+
+
+def _file_extension(audio_file: UploadFile) -> str:
+    """ログ用の拡張子（例: ".m4a"）。ファイル名には本人の名前などが入りうるため、名前そのものはログに出さない"""
+    return os.path.splitext(audio_file.filename or "")[1].lower()
 
 
 def _validate_audio_magic_bytes(head: bytes) -> None:

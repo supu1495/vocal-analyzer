@@ -11,6 +11,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
+# メールアドレスは個人情報のためログに出さない（issue #33）。利用者は user_id で追う
 logger = logging.getLogger(__name__)
 
 from auth_utils import (
@@ -82,16 +83,16 @@ def register(body: RegisterRequest, response: Response, db: Session = Depends(ge
     # 招待コードを最初に確かめる。後にすると、招待されていない人でも
     # 409（登録済み）の返事からメールアドレスの登録有無を知れてしまう
     if not _is_valid_invite_code(body.invite_code):
-        logger.warning("Register rejected (invalid invite code): email=%s", body.email)
+        logger.warning("Register rejected (invalid invite code)")
         raise HTTPException(status_code=403, detail="招待コードが正しくありません。")
 
     if len(body.password) < 8:
-        logger.info("Register rejected (weak password): email=%s", body.email)
+        logger.info("Register rejected (weak password)")
         raise HTTPException(status_code=400, detail="パスワードは8文字以上で設定してください。")
 
     existing = db.query(User).filter(User.email == body.email).first()
     if existing:
-        logger.info("Register rejected (duplicate email): email=%s", body.email)
+        logger.info("Register rejected (duplicate email)")
         raise HTTPException(status_code=409, detail="このメールアドレスはすでに登録されています。")
 
     user = User(
@@ -102,7 +103,7 @@ def register(body: RegisterRequest, response: Response, db: Session = Depends(ge
     db.add(user)
     db.commit()
     db.refresh(user)
-    logger.info("User registered: user_id=%d email=%s", user.id, user.email)
+    logger.info("User registered: user_id=%d", user.id)
 
     _set_auth_cookie(response, create_access_token(user.id))
     return AuthResponse(user_id=user.id, email=user.email, disclaimer_accepted=user.disclaimer_accepted)
@@ -125,11 +126,11 @@ def login(body: LoginRequest, response: Response, db: Session = Depends(get_db))
 
     if not password_valid or user is None:
         record_login_failure(body.email)
-        logger.warning("Login failed: email=%s", body.email)
+        logger.warning("Login failed")
         raise HTTPException(status_code=401, detail="メールアドレスまたはパスワードが正しくありません。")
 
     clear_lockout(body.email)
-    logger.info("Login success: user_id=%d email=%s", user.id, user.email)
+    logger.info("Login success: user_id=%d", user.id)
     _set_auth_cookie(response, create_access_token(user.id))
     return AuthResponse(user_id=user.id, email=user.email, disclaimer_accepted=user.disclaimer_accepted)
 

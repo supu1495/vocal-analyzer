@@ -45,7 +45,7 @@ def db():
 
 @pytest.fixture
 def fake_redis():
-    """auth_utils._redis を fakeredis に差し替えるフィクスチャ"""
+    """auth_utils・upload_limits・task_failures の _redis を fakeredis に差し替えるフィクスチャ"""
     fake_r = fakeredis.FakeRedis()
 
     # Lua スクリプト（INCR + EXPIRE）をネイティブ操作でシミュレートする
@@ -58,7 +58,8 @@ def fake_redis():
 
     fake_r.eval = fake_eval
 
-    with patch("auth_utils._redis", fake_r), patch("upload_limits._redis", fake_r):
+    with patch("auth_utils._redis", fake_r), patch("upload_limits._redis", fake_r), \
+            patch("task_failures._redis", fake_r):
         yield fake_r
 
 
