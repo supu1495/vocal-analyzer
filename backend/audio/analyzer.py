@@ -3,6 +3,7 @@
 separator・pitch・techniquesを組み合わせて分析結果を生成する
 """
 
+import contextlib  # with で囲んだ段階の所要時間を測る関数（_stage）を短く書くために使用
 import logging
 import time
 
@@ -15,6 +16,21 @@ from audio.pitch import PitchDetector
 from audio.techniques import TechniqueDetector
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _stage(name: str):
+    """分析の1段階を囲み、所要時間をログに出す。例外が出たらどの段階で落ちたかを出す
+
+    スタックトレースは tasks.py の logger.exception で出すため、ここでは段階名と時間だけにする（二重に出さない）
+    """
+    start = time.time()
+    try:
+        yield
+    except Exception:
+        logger.error("Stage failed: stage=%s elapsed=%.2fs", name, time.time() - start)
+        raise
+    logger.info("Stage finished: stage=%s elapsed=%.2fs", name, time.time() - start)
 
 
 class AudioAnalyzer:
@@ -46,38 +62,36 @@ class AudioAnalyzer:
             }
         """
         # 音源分離：ボーカル・ドラム・ベース・その他に分離
-        t0 = time.time()
-        separated_tracks = self.separator.separate(audio_path)
-        logger.debug("Separator finished: %.2fs", time.time() - t0)
+        with _stage("separate"):
+            separated_tracks = self.separator.separate(audio_path)
 
         # ボーカルトラックからピッチを検出
-        t1 = time.time()
-        pitch_data = self.pitch_detector.detect(separated_tracks["vocals"])
-        logger.debug("Pitch detection finished: %.2fs", time.time() - t1)
+        with _stage("pitch"):
+            pitch_data = self.pitch_detector.detect(separated_tracks["vocals"])
 
         # ピッチデータから歌唱技法を検出
-        t2 = time.time()
-        detected_techniques = self.technique_detector.detect_all(pitch_data)
-        logger.debug("Technique detection finished: %.2fs", time.time() - t2)
+        with _stage("techniques"):
+            detected_techniques = self.technique_detector.detect_all(pitch_data)
 
-        # 声域（最低音〜最高音）を計算
-        vocal_range = self._calculate_vocal_range(pitch_data)
+        with _stage("scoring"):
+            # 声域（最低音〜最高音）を計算
+            vocal_range = self._calculate_vocal_range(pitch_data)
 
-        # ピッチ正確性とリズム感のスコアを計算
-        pitch_accuracy = self.pitch_detector.calculate_accuracy(pitch_data, {})
-        rhythm_score = self._calculate_rhythm_score(
-            separated_tracks["vocals"], separated_tracks["sample_rate"]
-        )
+            # ピッチ正確性とリズム感のスコアを計算
+            pitch_accuracy = self.pitch_detector.calculate_accuracy(pitch_data, {})
+            rhythm_score = self._calculate_rhythm_score(
+                separated_tracks["vocals"], separated_tracks["sample_rate"]
+            )
 
-        # スコアマトリクス（基本忠実度・技法スコア・不自然さペナルティ・総合スコア）を計算
-        score_matrix = self._calculate_score_matrix(
-            pitch_data, detected_techniques, pitch_accuracy, rhythm_score
-        )
+            # スコアマトリクス（基本忠実度・技法スコア・不自然さペナルティ・総合スコア）を計算
+            score_matrix = self._calculate_score_matrix(
+                pitch_data, detected_techniques, pitch_accuracy, rhythm_score
+            )
 
-        # スコアと技法データをもとにフィードバックを生成
-        feedback = self._generate_feedback(
-            pitch_accuracy, rhythm_score, detected_techniques, score_matrix
-        )
+            # スコアと技法データをもとにフィードバックを生成
+            feedback = self._generate_feedback(
+                pitch_accuracy, rhythm_score, detected_techniques, score_matrix
+            )
 
         return {
             "pitch_accuracy": pitch_accuracy,
