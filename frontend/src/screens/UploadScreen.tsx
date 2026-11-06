@@ -57,7 +57,8 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
           analysisId = statusData.analysis_id
           break
         } else if (statusData.status === 'FAILURE') {
-          throw new Error('分析中にエラーが発生しました')
+          // 失敗の理由（声が検出できない・形式不正・時間切れ など）ごとのサーバーの文言を出す。古い backend で detail が無いときは今までの文言
+          throw new Error(typeof statusData.detail === 'string' ? statusData.detail : '分析中にエラーが発生しました')
         }
       }
 
