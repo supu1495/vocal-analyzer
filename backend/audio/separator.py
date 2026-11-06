@@ -62,7 +62,8 @@ class VocalSeparator:
         try:
             wav, sr = torchaudio.load(wav_path)
         except RuntimeError as e:
-            # 要確認: torchaudio 2.1 は読めないファイルで RuntimeError を出す想定。別の例外なら internal 扱いになる
+            # 壊れた WAV では soundfile.LibsndfileError（RuntimeError の子クラス）が出ることを確認済み（2026-11-06）
+            # 要確認: ほかの壊れ方で別の例外が出たら internal 扱いになる
             raise AnalysisError(INVALID_FORMAT, "torchaudio failed to load") from e
         finally:
             if converted:

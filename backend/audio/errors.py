@@ -17,5 +17,11 @@ class AnalysisError(Exception):
     """
 
     def __init__(self, reason: str, message: str):
-        super().__init__(f"{reason}: {message}")
+        # 引数を2つとも渡す。Celery は失敗したタスクの例外を pickle で作り直せるか試し、
+        # args が __init__ の引数と合わないと UnpickleableExceptionWrapper に包み替えてしまう
+        super().__init__(reason, message)
         self.reason = reason
+        self.message = message
+
+    def __str__(self) -> str:
+        return f"{self.reason}: {self.message}"

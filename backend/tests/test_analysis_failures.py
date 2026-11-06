@@ -7,6 +7,7 @@
 """
 
 import logging
+import pickle
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -18,6 +19,17 @@ from audio.analyzer import AudioAnalyzer
 from audio.errors import INTERNAL, INVALID_FORMAT, NO_VOICE, TIMEOUT, AnalysisError
 from audio.separator import _to_wav
 from task_failures import get_failure_reason
+
+
+# ── audio/errors.py ───────────────────────────────────────────────────────────
+
+def test_analysis_error_survives_pickle():
+    """Celery は失敗したタスクの例外を pickle で作り直せるか試す。作り直せないと UnpickleableExceptionWrapper に包まれる"""
+    restored = pickle.loads(pickle.dumps(AnalysisError(NO_VOICE, "no voiced frames")))
+
+    assert isinstance(restored, AnalysisError)
+    assert restored.reason == NO_VOICE
+    assert str(restored) == "no_voice: no voiced frames"
 
 
 # ── audio/separator.py ────────────────────────────────────────────────────────
