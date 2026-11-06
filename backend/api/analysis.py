@@ -79,8 +79,8 @@ async def upload_audio(
         )
 
     logger.info(
-        "Upload received: user_id=%d filename=%s content_type=%s",
-        current_user.id, audio_file.filename, audio_file.content_type,
+        "Upload received: user_id=%d extension=%s content_type=%s",
+        current_user.id, _file_extension(audio_file), audio_file.content_type,
     )
 
     try:
@@ -222,13 +222,18 @@ def _validate_audio_content_type(audio_file: UploadFile) -> None:
     allowed_types = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/x-m4a"]
     if audio_file.content_type not in allowed_types:
         logger.warning(
-            "Upload rejected (invalid content-type): filename=%s content_type=%s",
-            audio_file.filename, audio_file.content_type,
+            "Upload rejected (invalid content-type): extension=%s content_type=%s",
+            _file_extension(audio_file), audio_file.content_type,
         )
         raise HTTPException(
             status_code=400,
             detail="対応していないファイル形式です。WAV/MP3/M4Aのみ対応しています。",
         )
+
+
+def _file_extension(audio_file: UploadFile) -> str:
+    """ログ用の拡張子（例: ".m4a"）。ファイル名には本人の名前などが入りうるため、名前そのものはログに出さない"""
+    return os.path.splitext(audio_file.filename or "")[1].lower()
 
 
 def _validate_audio_magic_bytes(head: bytes) -> None:

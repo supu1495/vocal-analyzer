@@ -55,8 +55,8 @@ def check_lockout(email: str) -> None:
     if count and int(count) >= _MAX_FAILURES:
         retry_after = _lockout_remaining_seconds(key)
         logger.warning(
-            "Lockout triggered: email=%s failure_count=%d retry_after=%d",
-            email, int(count), retry_after,
+            "Lockout triggered: failure_count=%d retry_after=%d",
+            int(count), retry_after,
         )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
