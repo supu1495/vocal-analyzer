@@ -11,6 +11,8 @@ import torchaudio
 from demucs.pretrained import get_model
 from demucs.apply import apply_model
 
+from audio.errors import INVALID_FORMAT, AnalysisError
+
 
 def _to_wav(audio_path: str) -> tuple[str, bool]:
     """WAV 以外の形式を ffmpeg で WAV に変換する。
@@ -19,11 +21,17 @@ def _to_wav(audio_path: str) -> tuple[str, bool]:
     if audio_path.lower().endswith(".wav"):
         return audio_path, False
     wav_path = audio_path + ".wav"
-    subprocess.run(
-        ["ffmpeg", "-y", "-i", audio_path, wav_path],
-        check=True,
-        capture_output=True,
-    )
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", audio_path, wav_path],
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as e:
+        # stderr には曲のタグ情報などが入りうるため、ログ用のメッセージには終了コードだけを入れる
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
+        raise AnalysisError(INVALID_FORMAT, f"ffmpeg failed: returncode={e.returncode}") from e
     return wav_path, True
 
 
@@ -53,6 +61,9 @@ class VocalSeparator:
         wav_path, converted = _to_wav(audio_path)
         try:
             wav, sr = torchaudio.load(wav_path)
+        except RuntimeError as e:
+            # 要確認: torchaudio 2.1 は読めないファイルで RuntimeError を出す想定。別の例外なら internal 扱いになる
+            raise AnalysisError(INVALID_FORMAT, "torchaudio failed to load") from e
         finally:
             if converted:
                 os.remove(wav_path)

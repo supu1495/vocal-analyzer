@@ -11,11 +11,15 @@ import numpy as np  # 周波数配列のフィルタリングと最小・最大�
 import librosa  # hz_to_midi・midi_to_note による周波数→ノート名変換に使用
 from librosa.onset import onset_detect  # 発声タイミング検出（librosa.onset.onset_detectの重複を避けるため個別import）
 
+from audio.errors import NO_VOICE, AnalysisError
 from audio.separator import VocalSeparator
 from audio.pitch import PitchDetector
 from audio.techniques import TechniqueDetector
 
 logger = logging.getLogger(__name__)
+
+# Crepe の信頼度がこれを超えるフレームを「声がある」とみなす（声域の計算と同じ基準）
+_VOICED_CONFIDENCE_THRESHOLD = 0.5
 
 
 @contextlib.contextmanager
@@ -31,6 +35,11 @@ def _stage(name: str):
         logger.error("Stage failed: stage=%s elapsed=%.2fs", name, time.time() - start)
         raise
     logger.info("Stage finished: stage=%s elapsed=%.2fs", name, time.time() - start)
+
+
+def _has_voice(pitch_data: dict) -> bool:
+    """信頼度が基準を超えるフレームが1つでもあれば True"""
+    return any(c > _VOICED_CONFIDENCE_THRESHOLD for c in pitch_data["confidence"])
 
 
 class AudioAnalyzer:
@@ -68,6 +77,10 @@ class AudioAnalyzer:
         # ボーカルトラックからピッチを検出
         with _stage("pitch"):
             pitch_data = self.pitch_detector.detect(separated_tracks["vocals"])
+            # 声が無いまま進むと、意味のないスコアを返してしまうため失敗にする
+            # 要確認: 今は「1フレームも無い」ときだけ。実音声で「何秒未満なら失敗」にするか調整する
+            if not _has_voice(pitch_data):
+                raise AnalysisError(NO_VOICE, "no voiced frames")
 
         # ピッチデータから歌唱技法を検出
         with _stage("techniques"):
@@ -107,7 +120,7 @@ class AudioAnalyzer:
         frequencies = np.array(pitch_data["frequencies"])
         confidence = np.array(pitch_data["confidence"])
 
-        confident_frequencies = frequencies[confidence > 0.5]
+        confident_frequencies = frequencies[confidence > _VOICED_CONFIDENCE_THRESHOLD]
         if len(confident_frequencies) == 0:
             return {"lowest": None, "highest": None, "range_semitones": 0}
 
