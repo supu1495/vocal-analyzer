@@ -1,4 +1,5 @@
-FROM python:3.11-slim
+# Python の版まで固定する。requirements.txt（ロック）は 3.11.18 を前提に作っている
+FROM python:3.11.18-slim
 
 WORKDIR /app
 
