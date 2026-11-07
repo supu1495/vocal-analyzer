@@ -26,24 +26,24 @@ export function DisclaimerScreen({ onAccepted }: { onAccepted: () => void }) {
   }
 
   return (
-    <div style={{ maxWidth: '560px', margin: '0 auto', padding: '80px 20px 40px' }}>
-      <h1 style={{ fontSize: '26px', fontWeight: '600', letterSpacing: '0.08em', color: 'white', marginBottom: '32px', textAlign: 'center' }}>免責事項</h1>
+    <div className="centered-block" style={{ maxWidth: 'var(--form-width)' }}>
+      <h1 style={{ fontSize: 'var(--heading-size)', fontWeight: '600', letterSpacing: '0.08em', color: 'white', margin: '0 0 var(--block-gap)', textAlign: 'center' }}>免責事項</h1>
 
-      <ul style={{ background: '#0d0d1a', border: '1px solid #2a2a3e', borderRadius: '12px', padding: '20px 20px 20px 40px', margin: '0 0 24px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <ul style={{ background: '#0d0d1a', border: '1px solid #2a2a3e', borderRadius: '12px', padding: '1.2em 1.2em 1.2em 2.4em', margin: '0 0 var(--field-gap)', display: 'flex', flexDirection: 'column', gap: '0.7em', fontSize: 'var(--body-size)' }}>
         {NOTICES.map(notice => (
-          <li key={notice} style={{ color: '#ccc', fontSize: '14px', lineHeight: 1.7 }}>{notice}</li>
+          <li key={notice} style={{ color: '#ccc', lineHeight: 1.7 }}>{notice}</li>
         ))}
       </ul>
 
-      {error && <p style={{ color: '#f87171', fontSize: '13px', marginBottom: '16px', textAlign: 'center' }}>{error}</p>}
+      {error && <p style={{ color: '#f87171', fontSize: 'var(--label-size)', margin: '0 0 var(--field-gap)', textAlign: 'center' }}>{error}</p>}
 
       <button
         onClick={handleAccept} disabled={loading}
         style={{
-          width: '100%', padding: '14px',
+          width: '100%', height: 'var(--button-height)',
           background: loading ? '#1e1e2e' : 'linear-gradient(135deg, #c084fc, #818cf8)',
           border: 'none', borderRadius: '12px',
-          color: loading ? '#444' : 'white', fontSize: '15px', fontWeight: '700',
+          color: loading ? '#444' : 'white', fontSize: 'var(--body-size)', fontWeight: '700',
           cursor: loading ? 'not-allowed' : 'pointer',
         }}
       >

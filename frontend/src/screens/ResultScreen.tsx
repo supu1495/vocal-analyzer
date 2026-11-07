@@ -8,7 +8,7 @@ export function ResultScreen({ result, onBack, onDashboard }: {
   const scores = result.result
   const techniques = scores.techniques
   return (
-    <div style={{ maxWidth: '600px', margin: '0 auto', padding: '40px 20px' }}>
+    <div style={{ width: '100%', maxWidth: 'var(--content-width)', margin: '0 auto', padding: '40px 0' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '32px' }}>
         <div>
           <p style={{ color: '#c084fc', fontSize: '12px', letterSpacing: '0.2em', marginBottom: '4px' }}>ANALYSIS RESULT</p>

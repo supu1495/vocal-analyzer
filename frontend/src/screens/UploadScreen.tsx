@@ -78,10 +78,10 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
   if (loading) {
     const dots = '.'.repeat((pollCount % 3) + 1)
     return (
-      <div style={{ maxWidth: '560px', margin: '0 auto', padding: '80px 20px', textAlign: 'center' }}>
-        <p style={{ color: '#c084fc', fontSize: '12px', letterSpacing: '0.2em', marginBottom: '48px' }}>VOCAL ANALYZER</p>
+      <div className="centered-block" style={{ maxWidth: 'var(--form-width)', textAlign: 'center' }}>
+        <p style={{ color: '#c084fc', fontSize: 'var(--caption-size)', letterSpacing: '0.2em', margin: '0 0 var(--block-gap)' }}>VOCAL ANALYZER</p>
 
-        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '40px' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 'var(--block-gap)' }}>
           <svg width="72" height="72" viewBox="0 0 72 72" style={{ animation: 'va-spin 1.2s linear infinite' }}>
             <defs>
               <linearGradient id="spinGrad" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -98,38 +98,38 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
           </svg>
         </div>
 
-        <h2 style={{ color: 'white', fontSize: '26px', fontWeight: '800', marginBottom: '12px' }}>
+        <h2 style={{ color: 'white', fontSize: 'var(--heading-size)', fontWeight: '800', margin: '0 0 0.3em' }}>
           分析中{dots}
         </h2>
-        <p style={{ color: '#555', fontSize: '13px', marginBottom: '32px' }}>
+        <p style={{ color: '#555', fontSize: 'var(--body-size)', margin: '0 0 var(--block-gap)' }}>
           AIが歌声を解析しています（最大10分かかる場合があります）
         </p>
 
         {(songTitle || artistName) && (
           <div style={{
             display: 'inline-block', background: 'rgba(255,255,255,0.02)',
-            border: '1px solid #1e1e2e', borderRadius: '12px', padding: '14px 24px', marginBottom: '32px',
+            border: '1px solid #1e1e2e', borderRadius: '12px', padding: '0.8em 1.5em', marginBottom: 'var(--block-gap)',
           }}>
-            {songTitle && <p style={{ color: '#aaa', fontSize: '14px', marginBottom: artistName ? '2px' : 0 }}>{songTitle}</p>}
-            {artistName && <p style={{ color: '#555', fontSize: '12px' }}>{artistName}</p>}
+            {songTitle && <p style={{ color: '#aaa', fontSize: 'var(--body-size)', margin: artistName ? '0 0 2px' : 0 }}>{songTitle}</p>}
+            {artistName && <p style={{ color: '#555', fontSize: 'var(--caption-size)', margin: 0 }}>{artistName}</p>}
           </div>
         )}
 
         {pollCount > 0 && (
-          <p style={{ color: '#333', fontSize: '12px' }}>{pollCount * 5}秒経過 / 最大600秒</p>
+          <p style={{ color: '#333', fontSize: 'var(--caption-size)', margin: 0 }}>{pollCount * 5}秒経過 / 最大600秒</p>
         )}
       </div>
     )
   }
 
   return (
-    <div style={{ maxWidth: '560px', margin: '0 auto', padding: '40px 20px' }}>
-      <div style={{ marginBottom: '48px' }}>
-        <p style={{ color: '#c084fc', fontSize: '12px', letterSpacing: '0.2em', marginBottom: '8px' }}>VOCAL ANALYZER</p>
-        <h1 style={{ fontSize: '32px', fontWeight: '800', color: 'white', lineHeight: 1.2, marginBottom: '12px' }}>
+    <div className="centered-block" style={{ maxWidth: 'var(--form-width)' }}>
+      <div style={{ marginBottom: 'var(--block-gap)' }}>
+        <p style={{ color: '#c084fc', fontSize: 'var(--caption-size)', letterSpacing: '0.2em', margin: '0 0 0.6em' }}>VOCAL ANALYZER</p>
+        <h1 style={{ fontSize: 'var(--heading-size)', fontWeight: '800', color: 'white', lineHeight: 1.2, margin: '0 0 0.3em' }}>
           あなたの歌声を<br />分析しましょう
         </h1>
-        <p style={{ color: '#666', fontSize: '14px' }}>カラオケ録音をアップロードして、AIが歌唱力を詳細分析します</p>
+        <p style={{ color: '#666', fontSize: 'var(--body-size)', margin: 0 }}>カラオケ録音をアップロードして、AIが歌唱力を詳細分析します</p>
       </div>
 
       <div
@@ -139,55 +139,58 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
         onClick={() => document.getElementById('fileInput')?.click()}
         style={{
           border: `2px dashed ${dragging ? '#c084fc' : file ? '#34d399' : '#2a2a3e'}`,
-          borderRadius: '16px', padding: '48px 24px', textAlign: 'center', cursor: 'pointer',
+          // 高さは画面の縦に合わせて固定し、中身（アイコンと文字）は枠の縦の真ん中に置く
+          height: 'var(--dropzone-height)', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center',
+          borderRadius: '16px', padding: '0 24px', textAlign: 'center', cursor: 'pointer',
           background: dragging ? 'rgba(192,132,252,0.05)' : 'rgba(255,255,255,0.02)',
-          transition: 'all 0.2s ease', marginBottom: '24px',
+          transition: 'all 0.2s ease', marginBottom: 'var(--field-gap)',
         }}
       >
         <input id="fileInput" type="file" accept=".wav,.mp3,.m4a,audio/*" style={{ display: 'none' }}
           onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])} />
-        <div style={{ fontSize: '36px', marginBottom: '12px' }}>{file ? '🎵' : '🎤'}</div>
+        <div style={{ fontSize: 'var(--heading-size)', marginBottom: '0.3em' }}>{file ? '🎵' : '🎤'}</div>
         {file ? (
           <>
-            <p style={{ color: '#34d399', fontWeight: '600', marginBottom: '4px' }}>{file.name}</p>
-            <p style={{ color: '#555', fontSize: '13px' }}>{(file.size / 1024 / 1024).toFixed(1)} MB</p>
+            <p style={{ color: '#34d399', fontWeight: '600', fontSize: 'var(--body-size)', margin: '0 0 0.25em' }}>{file.name}</p>
+            <p style={{ color: '#555', fontSize: 'var(--label-size)', margin: 0 }}>{(file.size / 1024 / 1024).toFixed(1)} MB</p>
           </>
         ) : (
           <>
-            <p style={{ color: '#aaa', marginBottom: '4px' }}>音声ファイルをドロップ</p>
-            <p style={{ color: '#555', fontSize: '13px' }}>または クリックして選択（WAV / MP3 / M4A）</p>
+            <p style={{ color: '#aaa', fontSize: 'var(--body-size)', margin: '0 0 0.25em' }}>音声ファイルをドロップ</p>
+            <p style={{ color: '#555', fontSize: 'var(--label-size)', margin: 0 }}>または クリックして選択（WAV / MP3 / M4A）</p>
           </>
         )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--field-gap)', marginBottom: 'var(--field-gap)' }}>
         {[
           { label: '楽曲名', value: songTitle, setter: setSongTitle, placeholder: 'Feeling' },
           { label: 'アーティスト', value: artistName, setter: setArtistName, placeholder: 'Mrs. GREEN APPLE' },
         ].map(({ label, value, setter, placeholder }) => (
           <div key={label}>
-            <label style={{ color: '#666', fontSize: '11px', letterSpacing: '0.1em', display: 'block', marginBottom: '6px' }}>
+            <label style={{ color: '#666', fontSize: 'var(--label-size)', letterSpacing: '0.1em', display: 'block', marginBottom: '0.4em' }}>
               {label}（任意）
             </label>
             <input value={value} onChange={(e) => setter(e.target.value)} placeholder={placeholder}
-              style={{ width: '100%', padding: '10px 12px', background: '#0d0d1a', border: '1px solid #2a2a3e',
-                borderRadius: '8px', color: 'white', fontSize: '14px', outline: 'none', boxSizing: 'border-box' }} />
+              style={{ width: '100%', height: 'var(--input-height)', padding: '0 0.9em', background: '#0d0d1a', border: '1px solid #2a2a3e',
+                borderRadius: '10px', color: 'white', fontSize: 'var(--body-size)', outline: 'none' }} />
           </div>
         ))}
       </div>
 
-      {error && <p style={{ color: '#f87171', fontSize: '13px', marginBottom: '16px', textAlign: 'center' }}>{error}</p>}
+      {error && <p style={{ color: '#f87171', fontSize: 'var(--label-size)', margin: '0 0 var(--field-gap)', textAlign: 'center' }}>{error}</p>}
 
       <button onClick={handleSubmit} disabled={!file || loading} style={{
-        width: '100%', padding: '16px',
+        width: '100%', height: 'var(--button-height)',
         background: file && !loading ? 'linear-gradient(135deg, #c084fc, #818cf8)' : '#1e1e2e',
         border: 'none', borderRadius: '12px',
-        color: file && !loading ? 'white' : '#444', fontSize: '16px', fontWeight: '700',
+        color: file && !loading ? 'white' : '#444', fontSize: 'var(--body-size)', fontWeight: '700',
         cursor: file && !loading ? 'pointer' : 'not-allowed', transition: 'all 0.2s ease', letterSpacing: '0.05em',
       }}>
         {loading ? '分析中...' : '分析を開始する →'}
       </button>
-      <p style={{ color: '#555', fontSize: '12px', textAlign: 'center', marginTop: '12px' }}>
+      {/* ボタンのすぐ下に置く */}
+      <p style={{ color: '#555', fontSize: 'var(--caption-size)', textAlign: 'center', margin: '1em 0 0' }}>
         録音ファイルは分析後すぐに削除され、保存されません。
       </p>
     </div>
