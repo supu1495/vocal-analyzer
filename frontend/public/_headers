@@ -2,15 +2,17 @@
 # 書き方: https://developers.cloudflare.com/workers/static-assets/headers/
 # ビルドで dist にコピーされる。dev（Vite）では使われない
 #
-# CSP は、まず Report-Only（違反してもブラウザのコンソールに出るだけで止めない）で本番に出す。
-# 違反が出ないこと・このファイルが効いていることを確かめてから、名前を Content-Security-Policy に変える
+# CSP は Report-Only で本番に出し、違反とこのファイルが効いていることを確かめてから本物にした（2026-11-08）
+#   確かめたこと：アセットだけの構成でも効く。ログイン〜統計まで操作して、違反は Cloudflare が差し込む
+#   インラインのスクリプト2件だけ（読み込むたびにハッシュが変わるので、ハッシュでの許可もできない）
+#   CSP を変えるときは、また Report-Only で出してから切り替える
 #   script-src  : 自分のスクリプト + Cloudflare Web Analytics（自動で差し込まれる beacon.min.js）
 #                 JavaScript Detections（/cdn-cgi/challenge-platform/ とインラインのスクリプト）は許可しない。
 #                 止まってもサイトの動きには影響しない（Cloudflare の公式ドキュメント）。2026-11-08 に割り切ると決めた
-#   style-src   : ビルドした CSS だけ。React の style={...} は JavaScript から直接書き換えるので CSP の対象外（要確認）
+#   style-src   : ビルドした CSS だけ。React の style={...} は JavaScript から直接書き換えるので CSP の対象外（Report-Only で違反が出ないことを確かめた）
 #   connect-src : 自分（Web Analytics の送信先 /cdn-cgi/rum を含む）+ API
 /*
-  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self' https://vocal-api.supu361.dev; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self' https://vocal-api.supu361.dev; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   X-Frame-Options: DENY
