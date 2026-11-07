@@ -60,7 +60,7 @@ export default function App() {
   const needsDisclaimer = auth !== null && !auth.disclaimerAccepted && !isAuthScreen
 
   return (
-    <div style={{ minHeight: '100vh', background: '#080812', color: 'white', fontFamily: "'Noto Sans JP', 'Hiragino Sans', sans-serif" }}>
+    <div style={{ minHeight: '100vh', background: '#080812', color: 'white' }}>
       <VersionWarning />
       <header style={{ borderBottom: '1px solid #0d0d1a', padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span
