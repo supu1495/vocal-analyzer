@@ -9,7 +9,9 @@ export function LineChart({ data }: { data: Statistics['history'] }) {
   const toPath = (ys: number[]) =>
     ys.map((y, i) => `${i === 0 ? 'M' : 'L'} ${xs[i]} ${y}`).join(' ')
   return (
-    <svg width={w} height={h} style={{ overflow: 'visible' }}>
+    // viewBox で座標を w×h に固定し、表示は箱の幅に合わせて縮める（狭い画面で箱からはみ出さないように）
+    // 広い画面でも w より大きくはしない（文字や点が大きくなりすぎないように）
+    <svg viewBox={`0 0 ${w} ${h}`} style={{ display: 'block', width: '100%', maxWidth: w, height: 'auto', margin: '0 auto', overflow: 'visible' }}>
       {[25, 50, 75].map(v => (
         <line key={v} x1={pad} x2={w - pad}
           y1={h - pad - (v / 100) * (h - pad * 2)}
