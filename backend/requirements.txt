@@ -4,6 +4,8 @@ sqlalchemy==2.0.25
 psycopg2-binary==2.9.9
 redis==5.0.1
 celery==5.3.6
+# kombu 5.7.0 は redis>=6.4.0 が必要で、redis 5.0.1 では worker が起動しないため固定する
+kombu==5.6.2
 PyJWT==2.12.1
 bcrypt==4.0.1
 python-multipart==0.0.7
