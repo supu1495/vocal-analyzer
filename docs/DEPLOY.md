@@ -136,6 +136,57 @@ docker compose exec -T backend python -c "import json, urllib.request; print(jso
 
 - フロントも戻したいときは、Cloudflare のダッシュボードで以前のデプロイに戻す（要確認：手順はまだ試していない）
 
+## ライブラリの版（ロックファイル）
+
+間接的に入るライブラリまで版を固定して、いつビルドしても同じ版が入るようにしている（issue #62）。
+固定する前は、同じ `requirements.txt` でもビルドした日によって中身が変わり、2026-11-06 に本番の worker が起動しなくなった（kombu 5.7.0 が入った）。
+
+| ファイル | 中身 | 手で直すか |
+|---|---|---|
+| `backend/requirements.in` | 直接使うライブラリだけ | **直す**。版を変えるのはここ |
+| `backend/requirements.txt` | 間接的なものも含めた全部の版（ロック）。uv が `requirements.in` から作る | 直さない。作り直す |
+| `backend/requirements-nodeps.txt` | crepe だけ。`--no-deps` で入れる（hmmlearn の版の指定が合わないため） | 直す。ロックには入れない |
+| `backend/Dockerfile` の `FROM` | `python:3.11.18-slim`。Python の版まで固定する | Python を上げるときだけ |
+
+- ロックは Python 3.11.18 を前提に作っている（`--python-version 3.11.18`）。依存によっては Python の版で入るものが変わる（例：redis 5.0.1 は Python 3.11.2 以下のときだけ async-timeout を必要とする）。**Python を上げるときは、`FROM` と `--python-version` を両方変えて作り直す**
+- crepe が必要とするもののうち、matplotlib・imageio は入れていない。画像を保存する関数でしか使われず、`crepe.predict` は使わないため
+- torch は PyPI の版なので、CUDA 12.1 版（`nvidia-*` 約2.9GB）が入る。CPU 版にするのは #64
+- ハッシュの照合（`--require-hashes`）はしていない
+
+### ロックの作り直し
+
+開発フォルダで実行する。一回きりのコンテナで uv を動かすので、ホストにもイメージにも uv は残らない。
+
+```bash
+cd ~/works/vocal-analyzer
+docker run --rm -v "$PWD/backend:/work" -w /work python:3.11.18-slim \
+  sh -c "pip install -q uv==0.5.11 && uv pip compile requirements.in --python-version 3.11.18 --custom-compile-command 'docs/DEPLOY.md の手順で作り直す' -o requirements.txt; chown $(id -u):$(id -g) requirements.txt"
+```
+
+- uv は、すでにある `requirements.txt` の版をなるべく変えずに使う。`requirements.in` で変えたものと、それに引きずられるものだけが変わる
+- 間接的なライブラリだけを上げたいときは、`-P <名前>`（例：`-P kombu`）を `uv pip compile` に足す。全部を最新にする `-U` は、何が変わるか追えなくなるので使わない
+- 最後の `chown` は、コンテナが root で書いたファイルの持ち主を自分に戻すため
+
+### 版を上げる手順
+
+1. `requirements.in` を直す（間接的なものだけなら直さずに `-P` を使う）
+2. ロックを作り直し、`git diff backend/requirements.txt` で変わった行を確かめる。思っていない版の変化があれば、原因を調べてから進む
+3. 開発フォルダでビルドし、テストと分析を1件通す
+
+   ```bash
+   docker compose up -d --build backend celery_worker
+   docker compose exec backend python -m pytest -v
+   ```
+
+4. 3ファイル（`requirements.in`・`requirements.txt`、変えたなら `Dockerfile`）をまとめてコミットする
+5. マージ後、本番用フォルダで `scripts/deploy_backend.sh` を実行する（ビルドで新しい版が入る）
+
+入っている版を確かめるときは `pip list --format=freeze` を使う。`pip freeze` は setuptools・wheel・pip を表示しない。
+
+```bash
+docker compose exec celery_worker pip list --format=freeze
+```
+
 ## 移行（issue #31 のマージ後に1回だけ）
 
 #31 で compose の構成が変わった。マージ後、次の順に移行する。
