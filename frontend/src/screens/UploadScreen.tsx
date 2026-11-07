@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { API_BASE, type AnalysisResult } from '../types'
 
 export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
@@ -9,15 +9,6 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [pollCount, setPollCount] = useState(0)
-
-  useEffect(() => {
-    if (!loading) return
-    const style = document.createElement('style')
-    style.id = 'va-spin'
-    style.textContent = '@keyframes va-spin { to { transform: rotate(360deg); } }'
-    document.head.appendChild(style)
-    return () => { document.getElementById('va-spin')?.remove() }
-  }, [loading])
 
   const handleFile = (f: File) => {
     const allowed = ['audio/wav', 'audio/mpeg', 'audio/mp4', 'audio/x-m4a']

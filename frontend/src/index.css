@@ -75,3 +75,11 @@ select {
   margin: auto;
   padding: var(--block-gap) 0;
 }
+
+/* 分析中のくるくる（UploadScreen.tsx）。以前は JavaScript で <style> を差し込んでいたが、
+   CSP の style-src 'self' で止まるため、ここに置く */
+@keyframes va-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
