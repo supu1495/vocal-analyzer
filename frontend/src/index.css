@@ -1,68 +1,85 @@
+/* アプリ全体の土台。画面ごとの見た目は各コンポーネントの style で指定する */
+
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  /* ダークだけに対応する。ライトモードの端末でも、スクロールバーやフォームの色を暗い側にそろえる */
+  color-scheme: dark;
+  /* 端末に入っている日本語フォントを使う（外から読み込まない。CSP と通信を増やさないため） */
+  font-family: 'Hiragino Sans', 'Yu Gothic UI', 'Meiryo', 'Noto Sans JP', sans-serif;
   line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* ── 画面の大きさ（PC 前提。2026-11-08 にモックで決めた値） ──────────────
+     幅は画面の横（vw）、文字や高さは画面の縦（vh）に合わせる
+     縦の大きさの式：元の大きさ × (画面の高さ ÷ 760px)、ただし 1.15〜1.8 倍
+       → clamp(基準×1.15 px, 基準÷7.6 vh, 基準×1.8 px)。コメントの「基準」がその「元の大きさ」 */
+
+  /* 幅。max-width に使うので、狭い画面では画面の幅まで縮む */
+  --frame-width: clamp(960px, 75vw, 1700px);   /* ヘッダーと共通の枠。全ページ同じ */
+  --frame-gutter: 24px;                         /* 枠の左右の余白 */
+  --auth-width: clamp(480px, 40vw, 1000px);     /* ログイン・登録 */
+  --form-width: clamp(700px, 60vw, 1500px);     /* アップロード・免責事項 */
+  --content-width: 600px;                       /* 結果・統計（大きさは未定） */
+
+  /* 高さ・間隔 */
+  --header-height: clamp(74px, 8.4vh, 115px);   /* 基準 64px */
+  --input-height: clamp(60px, 6.8vh, 94px);     /* 基準 52px */
+  --button-height: clamp(67px, 7.6vh, 104px);   /* 基準 58px */
+  --field-gap: clamp(18px, 2.1vh, 29px);        /* 入力欄どうしの間。基準 16px */
+  --block-gap: clamp(46px, 5.3vh, 72px);        /* 見出しと入力のかたまりの間など。基準 40px */
+  --dropzone-height: clamp(200px, 30vh, 520px); /* アップロードのドロップ枠 */
+
+  /* 文字 */
+  --logo-size: clamp(22px, 2.5vh, 34px);        /* 基準 19px */
+  --heading-size: clamp(39px, 4.5vh, 61px);     /* 基準 34px */
+  --body-size: clamp(17px, 2vh, 27px);          /* 説明文・入力欄・ボタン。基準 15px */
+  --label-size: clamp(16px, 1.8vh, 25px);       /* 入力欄の名前。基準 14px */
+  --caption-size: clamp(14px, 1.6vh, 22px);     /* 小さい注記・VOCAL ANALYZER・ヘッダーのボタン。基準 12px */
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
-a:hover {
-  color: #535bf2;
+
+/* スクロールバーの場所を常に空けておく。長い画面（スクロールバーあり）と短い画面（なし）を移ったときに、
+   中央寄せの枠が左右にずれ、ヘッダーのロゴやログアウトの位置が変わらないようにする */
+html {
+  scrollbar-gutter: stable;
 }
 
 body {
   margin: 0;
-  display: flex;
-  place-items: center;
   min-width: 320px;
   min-height: 100vh;
+  /* アプリの外側（スクロールしたときの端など）もアプリの背景色にする */
+  background: #080812;
+  color: white;
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+/* ボタンと入力欄は、既定ではページのフォントを引き継がないため */
+button,
+input,
+textarea,
+select {
+  font: inherit;
 }
 
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+/* 入力のかたまり（ログイン・登録・アップロード・免責事項）を、ヘッダーより下の縦の真ん中に置く
+   App.tsx の <main> が縦の flex なので、上下の margin: auto で真ん中に寄る
+   画面が低くてはみ出すときは margin が 0 になり、ふつうにスクロールする
+   width: 100% は、flex の中で margin: auto を使うと中身の幅まで縮んでしまうのを防ぐため */
+.centered-block {
+  width: 100%;
+  margin: auto;
+  padding: var(--block-gap) 0;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
+/* 分析中のくるくる（UploadScreen.tsx）。以前は JavaScript で <style> を差し込んでいたが、
+   CSP の style-src 'self' で止まるため、ここに置く */
+@keyframes va-spin {
+  to {
+    transform: rotate(360deg);
   }
 }

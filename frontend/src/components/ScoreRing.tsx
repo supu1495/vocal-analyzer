@@ -3,8 +3,9 @@ export function ScoreRing({ score, label, color }: { score: number; label: strin
   const circ = 2 * Math.PI * r
   const offset = circ - (score / 100) * circ
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-      <svg width="88" height="88" viewBox="0 0 88 88">
+    // 横に並んだ箱が狭いときは、88px より小さく縮む（flex の中で縮めるには minWidth: 0 が要る）
+    <div style={{ flex: '0 1 88px', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+      <svg viewBox="0 0 88 88" style={{ display: 'block', width: '100%', maxWidth: '88px', height: 'auto' }}>
         <circle cx="44" cy="44" r={r} fill="none" stroke="#1e1e2e" strokeWidth="8" />
         <circle
           cx="44" cy="44" r={r} fill="none"

@@ -60,36 +60,41 @@ export default function App() {
   const needsDisclaimer = auth !== null && !auth.disclaimerAccepted && !isAuthScreen
 
   return (
-    <div style={{ minHeight: '100vh', background: '#080812', color: 'white', fontFamily: "'Noto Sans JP', 'Hiragino Sans', sans-serif" }}>
+    // 縦の flex にして、<main> がヘッダーより下の残りの高さを全部使えるようにする（入力のかたまりを縦の真ん中に置くため）
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: '#080812', color: 'white' }}>
       <VersionWarning />
-      <header style={{ borderBottom: '1px solid #0d0d1a', padding: '16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span
-          onClick={() => auth && setScreen('upload')}
-          style={{ color: '#c084fc', fontWeight: '800', fontSize: '16px', cursor: auth ? 'pointer' : 'default', letterSpacing: '0.05em' }}
-        >
-          ◈ VOCAL ANALYSIS
-        </span>
+      {/* 下の線は画面いっぱいに引き、中身は共通の枠（--frame-width）に入れる */}
+      <header style={{ borderBottom: '1px solid #0d0d1a' }}>
+        <div style={{ maxWidth: 'var(--frame-width)', height: 'var(--header-height)', margin: '0 auto', padding: '0 var(--frame-gutter)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span
+            onClick={() => auth && setScreen('upload')}
+            style={{ color: '#c084fc', fontWeight: '800', fontSize: 'var(--logo-size)', cursor: auth ? 'pointer' : 'default', letterSpacing: '0.05em' }}
+          >
+            ◈ VOCAL ANALYSIS
+          </span>
 
-        {auth && !isAuthScreen ? (
-          <nav style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            {[{ id: 'upload', label: '分析' }, { id: 'dashboard', label: '統計' }].map(({ id, label }) => (
-              <button key={id} onClick={() => setScreen(id as Screen)} style={{
-                background: screen === id ? 'rgba(192,132,252,0.15)' : 'none',
-                border: screen === id ? '1px solid rgba(192,132,252,0.3)' : '1px solid transparent',
-                borderRadius: '8px', color: screen === id ? '#c084fc' : '#555',
-                padding: '6px 14px', cursor: 'pointer', fontSize: '13px', transition: 'all 0.2s',
-              }}>{label}</button>
-            ))}
-            <span style={{ color: '#333', margin: '0 4px' }}>|</span>
-            <span style={{ color: '#444', fontSize: '12px' }}>{auth.email}</span>
-            <button onClick={handleLogout} style={{ background: 'none', border: '1px solid #2a2a3e', borderRadius: '8px', color: '#555', padding: '6px 12px', cursor: 'pointer', fontSize: '12px' }}>
-              ログアウト
-            </button>
-          </nav>
-        ) : <div />}
+          {auth && !isAuthScreen ? (
+            <nav style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              {[{ id: 'upload', label: '分析' }, { id: 'dashboard', label: '統計' }].map(({ id, label }) => (
+                <button key={id} onClick={() => setScreen(id as Screen)} style={{
+                  background: screen === id ? 'rgba(192,132,252,0.15)' : 'none',
+                  border: screen === id ? '1px solid rgba(192,132,252,0.3)' : '1px solid transparent',
+                  borderRadius: '8px', color: screen === id ? '#c084fc' : '#555',
+                  padding: '0.4em 1em', cursor: 'pointer', fontSize: 'var(--caption-size)', transition: 'all 0.2s',
+                }}>{label}</button>
+              ))}
+              <span style={{ color: '#333', margin: '0 4px' }}>|</span>
+              <span style={{ color: '#444', fontSize: 'var(--caption-size)' }}>{auth.email}</span>
+              <button onClick={handleLogout} style={{ background: 'none', border: '1px solid #2a2a3e', borderRadius: '8px', color: '#555', padding: '0.4em 1em', cursor: 'pointer', fontSize: 'var(--caption-size)' }}>
+                ログアウト
+              </button>
+            </nav>
+          ) : <div />}
+        </div>
       </header>
 
-      <main>
+      {/* 各画面は、この枠の中で自分の幅にして中央に寄せる。縦の flex なので、.centered-block の画面は縦の真ん中に来る */}
+      <main style={{ flex: 1, width: '100%', maxWidth: 'var(--frame-width)', margin: '0 auto', padding: '0 var(--frame-gutter)', display: 'flex', flexDirection: 'column' }}>
         {screen === 'login' && <AuthScreen mode="login" onSuccess={handleAuthSuccess} onToggle={() => setScreen('register')} />}
         {screen === 'register' && <AuthScreen mode="register" onSuccess={handleAuthSuccess} onToggle={() => setScreen('login')} />}
         {needsDisclaimer && <DisclaimerScreen onAccepted={handleDisclaimerAccepted} />}

@@ -117,26 +117,29 @@ export function AuthScreen({
   }
 
   const inputStyle: CSSProperties = {
-    width: '100%', padding: '12px 14px', background: '#0d0d1a',
+    width: '100%', height: 'var(--input-height)', padding: '0 0.9em', background: '#0d0d1a',
     border: '1px solid #2a2a3e', borderRadius: '10px',
-    color: 'white', fontSize: '14px', outline: 'none', boxSizing: 'border-box',
+    color: 'white', fontSize: 'var(--body-size)', outline: 'none',
+  }
+  const labelStyle: CSSProperties = {
+    color: '#666', fontSize: 'var(--label-size)', letterSpacing: '0.1em', display: 'block', marginBottom: '0.4em',
   }
 
   return (
-    <div style={{ maxWidth: '400px', margin: '0 auto', padding: '80px 20px 40px' }}>
-      <div style={{ marginBottom: '40px', textAlign: 'center' }}>
-        <p style={{ color: '#c084fc', fontSize: '12px', letterSpacing: '0.2em', marginBottom: '12px' }}>VOCAL ANALYZER</p>
-        <h1 style={{ fontSize: '26px', fontWeight: '800', color: 'white', marginBottom: '8px' }}>
+    <div className="centered-block" style={{ maxWidth: 'var(--auth-width)' }}>
+      <div style={{ marginBottom: 'var(--block-gap)', textAlign: 'center' }}>
+        <p style={{ color: '#c084fc', fontSize: 'var(--caption-size)', letterSpacing: '0.2em', margin: '0 0 0.8em' }}>VOCAL ANALYZER</p>
+        <h1 style={{ fontSize: 'var(--heading-size)', fontWeight: '800', color: 'white', margin: '0 0 0.25em' }}>
           {isLogin ? 'ログイン' : 'アカウント作成'}
         </h1>
-        <p style={{ color: '#555', fontSize: '13px' }}>
+        <p style={{ color: '#555', fontSize: 'var(--body-size)', margin: 0 }}>
           {isLogin ? 'メールアドレスとパスワードでログインしてください。' : '招待コードを受け取った方のみ登録できます。'}
         </p>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--field-gap)', marginBottom: 'var(--field-gap)' }}>
         <div>
-          <label style={{ color: '#666', fontSize: '11px', letterSpacing: '0.1em', display: 'block', marginBottom: '6px' }}>
+          <label style={labelStyle}>
             メールアドレス
           </label>
           <input
@@ -146,7 +149,7 @@ export function AuthScreen({
           />
         </div>
         <div>
-          <label style={{ color: '#666', fontSize: '11px', letterSpacing: '0.1em', display: 'block', marginBottom: '6px' }}>
+          <label style={labelStyle}>
             パスワード{!isLogin && '（8文字以上）'}
           </label>
           <input
@@ -157,7 +160,7 @@ export function AuthScreen({
         </div>
         {!isLogin && (
           <div>
-            <label style={{ color: '#666', fontSize: '11px', letterSpacing: '0.1em', display: 'block', marginBottom: '6px' }}>
+            <label style={labelStyle}>
               招待コード
             </label>
             {/* type="text": 貼り付けたコードが正しいか目で確かめられるように */}
@@ -170,22 +173,23 @@ export function AuthScreen({
         )}
       </div>
 
-      {error && <p style={{ color: '#f87171', fontSize: '13px', marginBottom: '16px', textAlign: 'center' }}>{error}</p>}
+      {error && <p style={{ color: '#f87171', fontSize: 'var(--label-size)', margin: '0 0 var(--field-gap)', textAlign: 'center' }}>{error}</p>}
 
       <button
         onClick={handleSubmit} disabled={loading || locked}
         style={{
-          width: '100%', padding: '14px',
+          width: '100%', height: 'var(--button-height)',
           background: loading || locked ? '#1e1e2e' : 'linear-gradient(135deg, #c084fc, #818cf8)',
           border: 'none', borderRadius: '12px',
-          color: loading || locked ? '#444' : 'white', fontSize: '15px', fontWeight: '700',
-          cursor: loading || locked ? 'not-allowed' : 'pointer', transition: 'all 0.2s ease', marginBottom: '20px',
+          color: loading || locked ? '#444' : 'white', fontSize: 'var(--body-size)', fontWeight: '700',
+          cursor: loading || locked ? 'not-allowed' : 'pointer', transition: 'all 0.2s ease',
         }}
       >
         {locked ? `⏱ ログイン制限中（${formatClockTime(lockedUntil)} まで）` : loading ? '処理中...' : isLogin ? 'ログイン →' : '登録する →'}
       </button>
 
-      <p style={{ textAlign: 'center', color: '#555', fontSize: '13px' }}>
+      {/* ボタンのすぐ下に置く */}
+      <p style={{ textAlign: 'center', color: '#555', fontSize: 'var(--label-size)', margin: '1em 0 0' }}>
         {isLogin ? 'アカウントがない方は' : 'すでにアカウントをお持ちの方は'}{' '}
         <span onClick={onToggle} style={{ color: '#c084fc', cursor: 'pointer', textDecoration: 'underline' }}>
           {isLogin ? '新規登録' : 'ログイン'}

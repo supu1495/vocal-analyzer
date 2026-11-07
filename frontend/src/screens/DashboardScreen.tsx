@@ -18,7 +18,7 @@ export function DashboardScreen({ latestResult, onBack }: {
   }, [])
 
   return (
-    <div style={{ maxWidth: '600px', margin: '0 auto', padding: '40px 20px' }}>
+    <div style={{ width: '100%', maxWidth: 'var(--content-width)', margin: '0 auto', padding: '40px 0' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
         <div>
           <p style={{ color: '#c084fc', fontSize: '12px', letterSpacing: '0.2em', marginBottom: '4px' }}>DASHBOARD</p>
