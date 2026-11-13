@@ -270,7 +270,7 @@ class AudioAnalyzer:
         if total_techniques == 0:
             improvements.append("ビブラートやしゃくりなど歌唱技法を意識して取り入れてみましょう")
         if penalty >= 10.0 and total_techniques > 0:
-            improvements.append("技法の使いすぎに注意。場面を選んで使うとメリハリが生まれます")
+            improvements.append("技法の使いすぎに注意（場面を選んで使うとメリハリが生まれます）")
 
         # 伸ばすべきポイント: スコアが高い項目・検出された技法を列挙する
         strengths = []
@@ -279,9 +279,9 @@ class AudioAnalyzer:
         if rhythm_score >= 80:
             strengths.append("リズム感が優れています")
         if vibrato_count > 0:
-            strengths.append("ビブラートが使えています。さらに磨いていきましょう")
+            strengths.append("ビブラートが使えています（さらに磨いていきましょう）")
         if kobushi_count > 0:
-            strengths.append("こぶしが使えています。")
+            strengths.append("こぶしが使えています")
         if long_tone["count"] > 0 and long_tone.get("avg_stability", 0) >= 80:
             strengths.append("ロングトーンが安定しています")
 
