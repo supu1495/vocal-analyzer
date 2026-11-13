@@ -21,6 +21,24 @@ logger = logging.getLogger(__name__)
 # Crepe の信頼度がこれを超えるフレームを「声がある」とみなす（声域の計算と同じ基準）
 _VOICED_CONFIDENCE_THRESHOLD = 0.5
 
+# 技法の使いすぎの上限（J-pop相場の上限）。これを超えると不自然さペナルティで減点し、フィードバックで「多すぎます」と伝える
+# 採点（_calculate_score_matrix）とフィードバック（_generate_feedback）の両方がここを読む。値を変えたらスコアの版（#23）を上げる
+# ロングトーンには上限がない。設定ファイルへの切り出しは #26
+OVERUSE_LIMITS = {
+    "vibrato": 40,
+    "shakuri": 30,
+    "kobushi": 15,
+    "fall": 10,
+}
+
+# フィードバックに出す技法の名前。並び順は採点の配点の順
+_TECHNIQUE_LABELS = {
+    "vibrato": "ビブラート",
+    "shakuri": "しゃくり",
+    "kobushi": "こぶし",
+    "fall": "フォール",
+}
+
 
 @contextlib.contextmanager
 def stage(name: str):
@@ -206,15 +224,10 @@ class AudioAnalyzer:
         # ピッチ分散が小さく技法もゼロ → 棒読みと判定（SPEC.md: 棒読み検出 Approach A）
         if total_techniques == 0 and pitch_std < 2.0:
             naturalness_penalty += 20.0
-        # J-pop相場の上限を超えた場合は過剰使用として減点
-        if vibrato_count  > 40:
-            naturalness_penalty += 10.0
-        if shakuri_count  > 30:
-            naturalness_penalty += 10.0
-        if kobushi_count  > 15:
-            naturalness_penalty += 10.0
-        if fall_count     > 10:
-            naturalness_penalty += 10.0
+        # J-pop相場の上限を超えた場合は過剰使用として、技法1つにつき減点
+        for name, limit in OVERUSE_LIMITS.items():
+            if detected_techniques[name]["count"] > limit:
+                naturalness_penalty += 10.0
 
         total_score = max(
             0.0,
@@ -269,21 +282,23 @@ class AudioAnalyzer:
             improvements.append("リズム感の向上（メトロノームに合わせて歌う練習が効果的です）")
         if total_techniques == 0:
             improvements.append("ビブラートやしゃくりなど歌唱技法を意識して取り入れてみましょう")
-        if penalty >= 10.0 and total_techniques > 0:
-            improvements.append("技法の使いすぎに注意（場面を選んで使うとメリハリが生まれます）")
 
-        # 伸ばすべきポイント: スコアが高い項目・検出された技法を列挙する
-        strengths = []
+        # できていること: 事実だけを書く（アドバイスや回数は付けない。回数は技法のバーに出ている）
+        achievements = []
         if pitch_accuracy >= 80:
-            strengths.append("音程の正確さが優れています")
+            achievements.append("音程の正確さが優れています")
         if rhythm_score >= 80:
-            strengths.append("リズム感が優れています")
-        if vibrato_count > 0:
-            strengths.append("ビブラートが使えています（さらに磨いていきましょう）")
-        if kobushi_count > 0:
-            strengths.append("こぶしが使えています")
+            achievements.append("リズム感が優れています")
+
+        # 技法: 上限を超えたものは改善点に、0回より多く上限以内のものはできていることに入れる
+        for name, label in _TECHNIQUE_LABELS.items():
+            count = detected_techniques[name]["count"]
+            if count > OVERUSE_LIMITS[name]:
+                improvements.append(f"{label}が多すぎます（場面を選んで使うとメリハリが生まれます）")
+            elif count > 0:
+                achievements.append(f"{label}が使えています")
         if long_tone["count"] > 0 and long_tone.get("avg_stability", 0) >= 80:
-            strengths.append("ロングトーンが安定しています")
+            achievements.append("ロングトーンが安定しています")
 
         # 見出しを1行、その下に中身を1行ずつ置き、\n でつなぐ（フロントは pre-line で改行を表示する）
         # 文の最後に「。」は付けない
@@ -291,8 +306,8 @@ class AudioAnalyzer:
         if improvements:
             lines.append("【改善点】")
             lines.extend(f"・{item}" for item in improvements)
-        if strengths:
-            lines.append("【伸ばすべきポイント】")
-            lines.extend(f"・{item}" for item in strengths)
+        if achievements:
+            lines.append("【できていること】")
+            lines.extend(f"・{item}" for item in achievements)
 
         return "\n".join(lines)
