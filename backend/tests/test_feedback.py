@@ -20,6 +20,7 @@ from audio.analyzer import OVERUSE_LIMITS, AudioAnalyzer
 CHARACTERISTIC = "【歌唱特性】"
 IMPROVEMENTS = "【改善点】"
 ACHIEVEMENTS = "【できていること】"
+OVERUSE_ADVICE = "場面を選んで使うとメリハリが生まれます"
 
 
 def _analyzer() -> AudioAnalyzer:
@@ -66,8 +67,8 @@ def _items_under(lines: list[str], heading: str) -> list[str]:
 @pytest.mark.parametrize(
     "pitch, rhythm, techniques, improvement_count, achievement_count",
     [
-        # 改善点：音程・リズム・4技法の多すぎ ／ できていること：ロングトーン
-        (50.0, 50.0, _techniques(1, **{n: limit + 1 for n, limit in OVERUSE_LIMITS.items()}), 6, 1),
+        # 改善点：音程・リズム・技法の使いすぎ（4技法を1行にまとめる） ／ できていること：ロングトーン
+        (50.0, 50.0, _techniques(1, **{n: limit + 1 for n, limit in OVERUSE_LIMITS.items()}), 3, 1),
         # 改善点：なし ／ できていること：音程・リズム・5技法の全部
         (90.0, 90.0, _techniques(1), 0, 7),
         # 改善点：技法を取り入れる ／ できていること：音程・リズム
@@ -127,10 +128,24 @@ def test_technique_at_limit_is_achievement(name, label):
     [("vibrato", "ビブラート"), ("shakuri", "しゃくり"), ("kobushi", "こぶし"), ("fall", "フォール")],
 )
 def test_technique_over_limit_is_improvement(name, label):
-    """上限を超えたら、改善点に技法の名前を出して「多すぎます」と書き、できていることには入れない"""
+    """上限を超えたら、改善点に「技法の使いすぎ：〇〇」と書き、できていることには入れない（1つだけのときも同じ形）"""
     lines = _feedback(70.0, 70.0, _techniques(0, **{name: OVERUSE_LIMITS[name] + 1}))
-    assert f"・{label}が多すぎます（場面を選んで使うとメリハリが生まれます）" in _items_under(lines, IMPROVEMENTS)
+    assert f"・技法の使いすぎ：{label}（{OVERUSE_ADVICE}）" in _items_under(lines, IMPROVEMENTS)
     assert not any(label in item for item in _items_under(lines, ACHIEVEMENTS))
+
+
+def test_overused_techniques_are_listed_in_one_line():
+    """上限を超えた技法が複数あっても、同じアドバイスを繰り返さず1行に並べる。並びは採点の配点の順"""
+    techniques = _techniques(
+        0,
+        vibrato=OVERUSE_LIMITS["vibrato"],  # ちょうど上限なので使いすぎではない
+        kobushi=OVERUSE_LIMITS["kobushi"] + 1,
+        fall=OVERUSE_LIMITS["fall"] + 1,
+        shakuri=OVERUSE_LIMITS["shakuri"] + 1,
+    )
+    improvements = _items_under(_feedback(70.0, 70.0, techniques), IMPROVEMENTS)
+
+    assert improvements == [f"・技法の使いすぎ：しゃくり、こぶし、フォール（{OVERUSE_ADVICE}）"]
 
 
 @pytest.mark.parametrize("name", list(OVERUSE_LIMITS))

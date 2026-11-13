@@ -291,12 +291,18 @@ class AudioAnalyzer:
             achievements.append("リズム感が優れています")
 
         # 技法: 上限を超えたものは改善点に、0回より多く上限以内のものはできていることに入れる
+        # 上限を超えた技法は、同じアドバイスが何行も続かないよう1行にまとめる（1つだけのときも同じ形）
+        overused = []
         for name, label in _TECHNIQUE_LABELS.items():
             count = detected_techniques[name]["count"]
             if count > OVERUSE_LIMITS[name]:
-                improvements.append(f"{label}が多すぎます（場面を選んで使うとメリハリが生まれます）")
+                overused.append(label)
             elif count > 0:
                 achievements.append(f"{label}が使えています")
+        if overused:
+            improvements.append(
+                f"技法の使いすぎ：{'、'.join(overused)}（場面を選んで使うとメリハリが生まれます）"
+            )
         if long_tone["count"] > 0 and long_tone.get("avg_stability", 0) >= 80:
             achievements.append("ロングトーンが安定しています")
 
