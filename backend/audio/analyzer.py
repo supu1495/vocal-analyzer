@@ -199,6 +199,7 @@ class AudioAnalyzer:
         long_tone_count = detected_techniques["long_tone"]["count"]
 
         # 各技法を「J-pop相場の下限を満点ライン」として 0〜1 に正規化してから配点
+        # 満点ライン（20・20・5・5・3）を変えたら、技法バーの最大値（frontend/src/types.ts の TECHNIQUE_FULL_MARKS）もそろえる
         vibrato_pts   = min(vibrato_count   / 20.0, 1.0) * 20.0
         shakuri_pts   = min(shakuri_count   / 20.0, 1.0) * 15.0
         kobushi_pts   = min(kobushi_count   /  5.0, 1.0) * 15.0

@@ -38,6 +38,17 @@ export interface AnalysisResult {
   }
 }
 
+// 技法バーの最大値。採点の「満点ライン」（この回数で技法の点が満点になる）と同じ値にする
+// backend/audio/analyzer.py の _calculate_score_matrix と必ずそろえる。満点ラインを超えた回数はバーいっぱいで止まる
+// 範囲（少ない／適正／多すぎ）の表示は #16
+export const TECHNIQUE_FULL_MARKS = {
+  vibrato: 20,
+  shakuri: 20,
+  kobushi: 5,
+  fall: 5,
+  long_tone: 3,
+} as const
+
 export interface Statistics {
   history: { date: string; pitch: number; rhythm: number }[]
   total_count: number
