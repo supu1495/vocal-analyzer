@@ -251,15 +251,15 @@ class AudioAnalyzer:
 
         # 歌唱特性: スコアパターンから歌い方の傾向を1文で表現する
         if penalty >= 20.0 and total_techniques == 0:
-            characteristic = "音程は安定していますが、感情表現や歌唱技法が少ない傾向があります。"
+            characteristic = "音程は安定していますが、感情表現や歌唱技法が少ない傾向があります"
         elif faithfulness >= 70 and technique >= 60:
-            characteristic = "音程・リズムの安定性と豊かな表現力を兼ね備えた歌い方です。"
+            characteristic = "音程・リズムの安定性と豊かな表現力を兼ね備えた歌い方です"
         elif faithfulness >= 70:
-            characteristic = "音程・リズムが安定した正確な歌い方です。"
+            characteristic = "音程・リズムが安定した正確な歌い方です"
         elif technique >= 60:
-            characteristic = "表現力豊かですが、音程・リズムの精度にまだ伸び代があります。"
+            characteristic = "表現力豊かですが、音程・リズムの精度にまだ伸び代があります"
         else:
-            characteristic = "基礎力と表現力の両方に伸び代があります。"
+            characteristic = "基礎力と表現力の両方に伸び代があります"
 
         # 改善点: スコアが低い項目・過剰項目を列挙する
         improvements = []
@@ -285,10 +285,14 @@ class AudioAnalyzer:
         if long_tone["count"] > 0 and long_tone.get("avg_stability", 0) >= 80:
             strengths.append("ロングトーンが安定しています")
 
-        parts = [f"【歌唱特性】{characteristic}"]
+        # 見出しを1行、その下に中身を1行ずつ置き、\n でつなぐ（フロントは pre-line で改行を表示する）
+        # 文の最後に「。」は付けない
+        lines = ["【歌唱特性】", characteristic]
         if improvements:
-            parts.append("【改善点】" + "、".join(improvements) + "。")
+            lines.append("【改善点】")
+            lines.extend(f"・{item}" for item in improvements)
         if strengths:
-            parts.append("【伸ばすべきポイント】" + "、".join(strengths) + "。")
+            lines.append("【伸ばすべきポイント】")
+            lines.extend(f"・{item}" for item in strengths)
 
-        return "\n".join(parts)
+        return "\n".join(lines)

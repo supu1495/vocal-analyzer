@@ -48,7 +48,7 @@ export function ResultScreen({ result, onBack, onDashboard }: {
       {scores.feedback && (
         <div style={{ background: 'rgba(192,132,252,0.05)', border: '1px solid rgba(192,132,252,0.15)', borderRadius: '16px', padding: '20px', marginBottom: '20px' }}>
           <p style={{ color: '#c084fc', fontSize: '11px', letterSpacing: '0.15em', marginBottom: '10px' }}>FEEDBACK</p>
-          {/* backend は【歌唱特性】【改善点】【伸ばすべきポイント】を \n 区切りで返す。pre-line で改行をそのまま表示する */}
+          {/* backend は見出し（【歌唱特性】など）と項目（・〜）を1行ずつ \n 区切りで返す。pre-line で改行をそのまま表示する */}
           <p style={{ color: '#ccc', fontSize: '14px', lineHeight: '1.6', whiteSpace: 'pre-line' }}>{scores.feedback}</p>
         </div>
       )}
