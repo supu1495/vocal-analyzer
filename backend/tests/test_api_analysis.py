@@ -229,8 +229,10 @@ def _jst(*args) -> datetime:
     return datetime(*args, tzinfo=ZoneInfo("Asia/Tokyo"))
 
 
-def test_upload_rejected_after_daily_limit(client, db):
+def test_upload_rejected_after_daily_limit(client, db, monkeypatch):
     """1日の上限（10回）までは通り、11回目は 429"""
+    # 開発環境の .env で上限を変えていても結果が変わらないよう、テストの中で決める
+    monkeypatch.setenv("DAILY_UPLOAD_LIMIT", "10")
     _register_and_login(client)
     with patch("upload_limits._now_jst", return_value=_jst(2026, 10, 30, 12, 0)):
         for _ in range(10):
