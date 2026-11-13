@@ -6,6 +6,10 @@
 import logging
 import os
 import uuid
+# datetime: 日付を作る関数の引数の型 ／ timezone: SQLite から返るタイムゾーンなしの日時を UTC とみなすため
+from datetime import datetime, timezone
+# ZoneInfo: 統計の日付を日本時間（Asia/Tokyo）にするため（upload_limits.py と同じ書き方）
+from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
@@ -34,6 +38,10 @@ _UPLOAD_DIR = "/tmp/vocal_analyzer"
 # アップロード上限とストリーミング読み込みのチャンクサイズ
 _MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 _CHUNK_SIZE = 1024 * 1024           # 1MB
+
+# 統計の日付は日本時間で区切る（DB は UTC で保存している。upload_limits.py の1日の回数と同じ区切り）
+# upload_limits.py の _JST はファイルの中だけで使う約束（名前が _ で始まる）なので、借りずに同じ定義を書く
+_JST = ZoneInfo("Asia/Tokyo")
 
 # 分析が失敗したときに利用者に見せる文言（reason は audio/errors.py）
 _FAILURE_MESSAGES = {
@@ -150,6 +158,15 @@ def get_analysis_status(
     return {"status": result.status}
 
 
+def _to_jst_date_label(created_at: datetime) -> str:
+    """分析した日時を、グラフに出す日本時間の「月/日」にする"""
+    # PostgreSQL はタイムゾーン付きの日時を返すので、そのまま日本時間に変換できる
+    # テストの SQLite はタイムゾーンを持たない日時を返す。保存したのは UTC なので、UTC とみなす
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return created_at.astimezone(_JST).strftime("%m/%d")
+
+
 @router.get("/user/statistics")
 def get_user_statistics(
     db: Session = Depends(get_db),
@@ -169,7 +186,7 @@ def get_user_statistics(
 
     history = [
         {
-            "date": record.created_at.strftime("%m/%d"),
+            "date": _to_jst_date_label(record.created_at),
             "pitch": round(record.pitch_accuracy) if record.pitch_accuracy is not None else 0,
             "rhythm": round(record.rhythm_score) if record.rhythm_score is not None else 0,
         }

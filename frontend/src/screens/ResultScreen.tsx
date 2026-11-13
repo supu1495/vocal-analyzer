@@ -1,4 +1,4 @@
-import { type AnalysisResult, calcTotalScore } from '../types'
+import { type AnalysisResult, calcTotalScore, TECHNIQUE_FULL_MARKS } from '../types'
 import { ScoreRing } from '../components/ScoreRing'
 import { TechniqueBar } from '../components/TechniqueBar'
 
@@ -38,17 +38,18 @@ export function ResultScreen({ result, onBack, onDashboard }: {
 
       <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid #1e1e2e', borderRadius: '16px', padding: '24px', marginBottom: '20px' }}>
         <p style={{ color: '#888', fontSize: '11px', letterSpacing: '0.15em', marginBottom: '20px' }}>TECHNIQUES</p>
-        <TechniqueBar label="ビブラート" value={techniques.vibrato.count} max={20} color="#c084fc" />
-        <TechniqueBar label="こぶし" value={techniques.kobushi.count} max={20} color="#f472b6" />
-        <TechniqueBar label="フォール" value={techniques.fall.count} max={20} color="#60a5fa" />
-        <TechniqueBar label="しゃくり" value={techniques.shakuri.count} max={20} color="#fb923c" />
-        <TechniqueBar label="ロングトーン" value={techniques.long_tone.count} max={20} color="#34d399" />
+        <TechniqueBar label="ビブラート" value={techniques.vibrato.count} max={TECHNIQUE_FULL_MARKS.vibrato} color="#c084fc" />
+        <TechniqueBar label="こぶし" value={techniques.kobushi.count} max={TECHNIQUE_FULL_MARKS.kobushi} color="#f472b6" />
+        <TechniqueBar label="フォール" value={techniques.fall.count} max={TECHNIQUE_FULL_MARKS.fall} color="#60a5fa" />
+        <TechniqueBar label="しゃくり" value={techniques.shakuri.count} max={TECHNIQUE_FULL_MARKS.shakuri} color="#fb923c" />
+        <TechniqueBar label="ロングトーン" value={techniques.long_tone.count} max={TECHNIQUE_FULL_MARKS.long_tone} color="#34d399" />
       </div>
 
       {scores.feedback && (
         <div style={{ background: 'rgba(192,132,252,0.05)', border: '1px solid rgba(192,132,252,0.15)', borderRadius: '16px', padding: '20px', marginBottom: '20px' }}>
           <p style={{ color: '#c084fc', fontSize: '11px', letterSpacing: '0.15em', marginBottom: '10px' }}>FEEDBACK</p>
-          <p style={{ color: '#ccc', fontSize: '14px', lineHeight: '1.6' }}>{scores.feedback}</p>
+          {/* backend は見出し（【歌唱特性】など）と項目（・〜）を1行ずつ \n 区切りで返す。pre-line で改行をそのまま表示する */}
+          <p style={{ color: '#ccc', fontSize: '14px', lineHeight: '1.6', whiteSpace: 'pre-line' }}>{scores.feedback}</p>
         </div>
       )}
 

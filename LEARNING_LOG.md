@@ -4722,9 +4722,9 @@ override の redis の `ports` を消した。中を見るときは `docker comp
 
 ### Tunnel のトークンをローテートしたとき
 
-ローテートすると、古いトークンを使っている cloudflared は次の起動からつながらない。
+トークンを作り直すときは、トンネルの設定にある「Rotate token」を使う。ローテートすると、古いトークンを使っている cloudflared は次の起動からつながらないので、本番の `.env` の `TUNNEL_TOKEN` を新しい値に書き換えて cloudflared を起動し直す。
 
-新しいトークンは、Cloudflare ダッシュボード → Networking → Tunnels → トンネルを選ぶ → Add a replica で表示されるコマンドの `eyJ...` の部分。コマンド自体は実行しない（実行すると cloudflared がもう1つ増える）。
+Add a replica（Cloudflare ダッシュボード → Networking → Tunnels → トンネルを選ぶ）は、同じトンネルに cloudflared をもう1つつなぐための画面で、表示されるのは**今の**トークン。作り直されはしない。（このセクションは最初「Add a replica で新しいトークンが表示される」と書いていたが、間違いだったので #31 の作業後に直した）
 
 ---
 
@@ -4741,3 +4741,167 @@ override の redis の `ports` を消した。中を見るときは `docker comp
 ### cloudflared がトンネルにつながったかの確認
 
 cloudflared のログに `Registered tunnel connection` の行が出ていれば、トンネルにつながっている。
+
+---
+
+## 本番と開発を分ける（issue #31）
+
+### イメージへの焼き込みと mount の違い
+
+以前は本番も開発も同じフォルダ・同じ compose で動かしていて、backend と worker に `./backend:/app` を mount していた。mount は「ホストのフォルダをコンテナの中にそのまま見せる」仕組みなので、ファイルを保存した瞬間にコンテナの中のコードも変わる。さらに backend は `--reload`（保存を検知して自動で再起動）付きだったため、作業中のブランチで保存しただけで本番の API が変わっていた（#19 の作業中、未同意なら 403 にする変更が保存直後に本番に入った）。
+
+そこで本番は、コードを `docker build` のときにイメージの中にコピーしたもの（焼き込み）だけを使うようにした。焼き込んだコードは、ビルドし直さない限り変わらない。`docker-compose.yml` を本番用（mount なし・`--reload` なし・ポート公開なし・frontend / nginx なし）にし、開発に必要な mount・`--reload`・ポートは `docker-compose.dev.yml` に移した。開発フォルダでは `.env` の `COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml` で2つを重ねて読む。後から読んだファイルの設定が、前のファイルの設定に足される・上書きされる。
+
+本番はデスクトップの `~/works/vocal-analyzer-prod`（main だけ）、開発は `~/works/vocal-analyzer` と、フォルダごと分けた。
+
+### compose のプロジェクト名と volume の名前
+
+docker compose は、コンテナ名や volume 名の頭にプロジェクト名を付ける。プロジェクト名は `.env` の `COMPOSE_PROJECT_NAME` で決まり、書いていなければフォルダ名になる。本番は `vocal-analyzer`、開発は `vocal-dev` にしたので、DB の volume は `vocal-analyzer_postgres_data` と `vocal-dev_postgres_data` の別物になり、同じ PC で両方を同時に動かしてもぶつからない。
+
+逆に言うと、本番のプロジェクト名を変えると、compose は `<新しい名前>_postgres_data` という別の volume を探す。見つからなければ空の volume を新しく作って起動するので、エラーにならずに「データが全部消えたように見える」状態になる（元の volume は残っているが、使われない）。そのため本番の名前は変えない。本番用フォルダの名前は `vocal-analyzer-prod` だが、`.env` に `COMPOSE_PROJECT_NAME=vocal-analyzer` を書いているので、プロジェクト名は元のまま。
+
+### 本番ではポート公開が要らない
+
+compose は、同じプロジェクトのコンテナを1つの内部ネットワークに入れ、サービス名（`backend`・`db` など）で互いに見つけられるようにする。cloudflared も同じプロジェクトのコンテナなので、`http://backend:8000` に直接つながる。
+
+`ports:` はホスト（PC）側の入口を開ける設定で、コンテナどうしの通信には要らない。本番で外から来るのは cloudflared 経由だけなので、ポートを公開しないことにした。公開しなければ、同じ PC の別のプログラムや LAN から backend や DB に入られる道がなくなり、10/30 の障害のようにポート番号がぶつかることもない。開発ではブラウザや psql から入りたいので、`docker-compose.dev.yml` で `127.0.0.1` に限ってポートを開けている。
+
+### コミット ID でフロントと backend のずれを見つける
+
+フロントは main に push すると Cloudflare が自動でビルドするが、backend は手で更新する。そのため片方だけ新しい状態が起きる（9/30 の 404 はフロントだけが新しかった。#19 のときは逆に backend だけが新しかった）。
+
+そこで、両方に「どのコミットからビルドしたか」を持たせて比べることにした。
+
+- backend：ビルド時に `GIT_COMMIT` をイメージに焼き込み、`/health` の `commit` で返す。`scripts/deploy_backend.sh` が `git rev-parse HEAD` の40文字を渡す。開発では、動いているのがイメージではなく作業中のファイルなので `dev` を返す
+- フロント：Cloudflare のビルド環境が渡す `WORKERS_CI_COMMIT_SHA` を、Vite の `define` でビルド時にコードへ埋め込む（`__APP_COMMIT__`）
+- 画面（`VersionWarning.tsx`）が `/health` を呼び、2つが違えば上部に黄色い帯を出す
+
+PR をマージするとまずフロントが新しくなって帯が出る。`deploy_backend.sh` を実行すると帯が消える。この流れで、backend の更新忘れに気づけるようになった。
+
+---
+
+## issue #31 の作業中に出会ったこと
+
+### docker compose config は --no-interpolate で見る
+
+`docker compose config` は、`.env` の値を `${...}` に埋め込んだ（interpolate した）後の設定を表示するので、パスワードやトークンも画面に出る（#28・#41 のときに `SECRET_KEY` が出た）。`--no-interpolate` を付けると、`${SECRET_KEY}` のように埋め込む前の形で表示される。プロジェクト名を確かめるだけなら `docker compose config --no-interpolate | head -1`、動くサービスの一覧なら `docker compose config --services` で、値を出さずに済む。
+
+### Cloudflare Tunnel のトークンは「Rotate token」で作り直す
+
+以前のメモ（「2台の PC で開発するときの注意」）に「新しいトークンは Add a replica で表示される」と書いていたが、間違いだった（そのセクションも直した）。Add a replica は、同じトンネルに cloudflared をもう1つつなぐための画面で、表示されるのは**今の**トークン。作り直されはしない。トークンが漏れたなどで作り直すときは、トンネルの設定にある「Rotate token」を使う。作り直すと、古いトークンの cloudflared は次の起動からつながらなくなるので、本番の `.env` の `TUNNEL_TOKEN` を新しい値に書き換えて cloudflared を起動し直す。
+
+---
+
+## ロギングと失敗理由（issue #33）
+
+### 段階ごとのログ
+
+以前は分析に失敗しても、フロントには「分析中にエラーが発生しました」としか出ず、どこで落ちたか分からなかった。分析の段階（モデルの読み込み・音源分離・ピッチ検出など）を `with stage("名前"):` で囲み、終わったら `Stage finished: stage=... elapsed=...`、例外が出たら `Stage failed: stage=...` をログに出すようにした。`stage` は `contextlib.contextmanager` で作った「前後に処理をはさむ」仕組みで、`yield` の前で時間を測り始め、`yield` の後（または `except`）でログを出す。
+
+スタックトレース（どの行で落ちたかの記録）は `tasks.py` の `logger.exception` で1回だけ出す。`stage` の中でも出すと同じものが2回並ぶので、`stage` では段階名と時間だけにした。メールアドレスやファイル名は、本人を特定できる情報なのでログに出さない（ファイル名は拡張子だけ出す）。
+
+### 失敗の理由を Redis に残す
+
+分析は worker、状態の確認（`/status/{task_id}`）は backend と、別のコンテナで動く。worker で分かった失敗の理由を backend に伝えるため、worker が失敗時に Redis の `task_failure:<task_id>` に理由（`invalid_format` / `no_voice` / `timeout` / `internal`）を書き、backend の status API がそれを読んで、理由ごとの文言を返すようにした。記録は24時間で自動的に消える（タスクの持ち主の記録と同じ期間）。
+
+hard time limit で worker が強制終了されたときは、理由を書く処理まで進まないので記録が残らない。記録がないときや知らない値のときは `internal` として返す。また、モデルの読み込み中の時間切れは録音のせいではないので、`timeout`（「短い録音で試してください」）ではなく `internal` にした。
+
+### Celery の例外は pickle で作り直されるので、引数を super().__init__() に渡す
+
+Celery は、タスクで起きた例外を結果の保存先（Redis）に入れるときに、その例外を pickle（Python のオブジェクトをバイト列にして、後で元に戻す仕組み）で作り直せるか試す。例外を pickle から元に戻すときは、`例外のクラス(*e.args)` のように、`args` を `__init__` に渡し直して作る。
+
+最初の `AnalysisError(reason, message)` は `super().__init__(message)` と1つしか渡していなかったので、`args` は `(message,)` の1つだけになる。作り直すときに `AnalysisError(message)` と呼ばれ、引数が足りずに失敗する。すると Celery は元の例外の代わりに `UnpickleableExceptionWrapper` という別物に包み替える。`super().__init__(reason, message)` と2つとも渡し、`args` と `__init__` の引数をそろえて直した。
+
+### コンテナを作り直すと Demucs のモデルが消える（#59）
+
+Demucs のモデル（`htdemucs`、約80MB）は、worker の最初の分析のときにダウンロードされ、コンテナの中の `/root/.cache/torch/hub/checkpoints/` に置かれる。この場所はイメージにも volume にも入っていないので、コンテナを作り直すと消え、次の1件目でまたダウンロードになる。2026-11-06 の動作確認では、ダウンロードが遅く（毎秒数KB〜約120KB）、時間切れ（9分）で2件続けて失敗した。途中まで落としたファイルは残らないので、毎回最初からやり直しになる。イメージに焼き込むか、volume に置くかを #59 で決める。
+
+---
+
+## kombu の版で本番の worker が起動しなくなった（PR #61）
+
+2026-11-06、本番を deploy したら celery_worker が `VersionMismatch('Redis transport requires redis-py versions 6.1.0 or later. You have 5.0.1')` で起動しなくなった。
+
+kombu は、Celery が Redis とやりとりするのに使うライブラリで、`celery` を入れると一緒に入る（間接的な依存）。`requirements.txt` は celery や redis（5.0.1）など直接使うものだけを固定していて、kombu は固定していなかった。kombu 5.7.0 が PyPI に公開されたのは 2026-11-03 05:58（UTC、日本時間 14:58）。そのあと本番でビルドのキャッシュが効かずにライブラリを入れ直したとき、最新の 5.7.0 が入った。開発のイメージは前に作ったものだったので 5.6.2 のままで、「開発では動くのに本番で動かない」状態になった。
+
+PyPI の情報では、kombu 5.7.0 は `kombu[redis]`（Redis を使うための追加の依存）として `redis>=6.4.0` を要求している。ただ、今回は `[redis]` を付けて入れていないので、pip はこの条件を確かめずに 5.7.0 と redis 5.0.1 を一緒に入れた。起動したときに kombu 自身が redis の版を確かめて、上のエラーを出した（エラー文の「6.1.0 以上」と PyPI の「6.4.0 以上」は数字が違うが、どちらにしても 5.0.1 では足りない）。
+
+hotfix として `kombu==5.6.2` を固定して直した。同じことはほかの間接的な依存でも起きうるので、全部を固定するのが #62。
+
+---
+
+## 依存ライブラリを全部固定する（issue #62）
+
+### requirements.in と requirements.txt（ロック）の違い
+
+`requirements.in` には、直接使うライブラリだけを書く。人が読み書きするのはこちらで、版を変えるのもここ。`requirements.txt` は、uv が `requirements.in` から作る「間接的に入るものも含めた全部の版の一覧」（ロックファイル）で、手では直さない。各行の下に `# via kombu` のように「誰が必要としているか」が書かれるので、なぜ入っているかも追える。
+
+Dockerfile はロックの `requirements.txt` から入れる。こうすると、`requirements.txt` が変わらない限り、いつビルドしても同じ版が入る。今回はロックを、今の開発の worker に入っている版を出発点にして作り、開発と本番の worker で `pip list --format=freeze` が一致することを確かめて閉じた。
+
+### uv pip compile
+
+`uv pip compile requirements.in -o requirements.txt` で、依存を全部たどって版を決め、ロックを書き出す。pip-tools の `pip-compile` と同じ形で、速い。すでに `requirements.txt` があると、その版をなるべく変えずに使う。間接的なものだけを上げたいときは `-P kombu` のように名前を指定する。全部を最新にする `-U` は、何が変わったか追えなくなるので使わない。uv はホストに入れず、一回きりのコンテナ（`docker run --rm`）の中で動かしている（手順は `docs/DEPLOY.md`）。
+
+### Python のイメージの版も固定する
+
+ライブラリが必要とするものは、Python の版によって変わることがある。たとえば redis 5.0.1 は、Python 3.11.2 以下のときだけ async-timeout を必要とする。ロックは「この Python の版なら、これが要る」と決めて作るので、ロックを作ったときの Python とイメージの Python がずれると、要るものが入っていない・要らないものが入る、ということが起きうる。
+
+`FROM python:3.11-slim` のように細かい版を書かないと、ビルドした日によって 3.11 の中の最新（3.11.18 など）が入る。そこで `FROM python:3.11.18-slim` と細かい版まで固定し、ロックも `--python-version 3.11.18` で作るようにした。Python を上げるときは、この2か所を両方変えてロックを作り直す。
+
+### pip freeze に出ない setuptools・wheel・pip
+
+開発と本番で入っている版を比べるとき、`pip freeze` は setuptools・wheel・pip を表示しない（この環境の Python 3.11 の場合）。これらも含めて比べるには `pip list --format=freeze` を使う（形式は `pip freeze` と同じ `名前==版`）。
+
+---
+
+## 画面の基本情報と CSP（issue #10）
+
+### CSP と Report-Only
+
+CSP（Content-Security-Policy）は、「このページで読み込んでよいスクリプト・CSS・通信先はここだけ」とブラウザに伝えるヘッダー。もし攻撃者が画面にスクリプトを紛れ込ませても、許可した場所以外のスクリプトは実行されなくなる。
+
+設定を間違えると、自分のサイトの必要なスクリプトまで止まって画面が壊れる。そこで先に `Content-Security-Policy-Report-Only` で出した。Report-Only は「違反を DevTools のコンソールに報告するだけで、止めはしない」モード。本番でログインから統計まで操作し、違反が想定どおりのものだけだと確かめてから、本物の `Content-Security-Policy` に切り替えた（PR #70）。CSP を変えるときも、また Report-Only から始める。
+
+### Cloudflare が差し込むスクリプト
+
+Cloudflare は、配信するページに自分のスクリプトを自動で差し込む。
+
+- Web Analytics：アクセス数を数える `beacon.min.js`（`static.cloudflareinsights.com` から読み込む）。結果は `/cdn-cgi/rum` に送る。これは `script-src` と `connect-src` で許可した
+- JavaScript Detections：ボットかどうかを見分けるためのスクリプト。ページにインラインのスクリプト（HTML の中に直接書かれたスクリプト）を差し込み、そのスクリプトが見えない iframe を作って、iframe の中にも `__CF$cv$params` を含むインラインのスクリプトを差し込む。外側と内側で1件ずつ、違反が2件出る（本番のページのソースで確かめた）
+
+インラインのスクリプトを許可する方法には、中身のハッシュを CSP に書くやり方がある。しかし JavaScript Detections のスクリプトは読み込むたびに中身（ハッシュ）が変わるので、それもできない。JavaScript Detections は止まってもサイトの動きに影響しない（Cloudflare の公式ドキュメント）ので、許可しないと決めた（2026-11-08）。
+
+### _headers はアセットだけの Workers でも効く
+
+`frontend/public/_headers` に「どのパスに、どのヘッダーを付けるか」を書いておくと、Cloudflare が配信時にそのヘッダーを付ける（書き方は https://developers.cloudflare.com/workers/static-assets/headers/ ）。`public/` に置いたファイルは Vite のビルドで `dist/` にそのままコピーされる。今の構成は Workers のコードを持たない「静的アセットだけ」だが、それでも効くことを、本番の Response Headers に `content-security-policy-report-only` と `x-robots-tag` が出ていることで確かめた。dev（Vite）では `_headers` は使われない。
+
+### robots.txt と noindex の違い
+
+- `robots.txt`（`Disallow: /`）：検索エンジンのクローラーに「ページを取りに来ないで」と頼む。取りに来ないだけなので、ほかのサイトからリンクされていると、中身は分からないまま URL だけ検索結果に出ることがある
+- noindex（`<meta name="robots" content="noindex, nofollow">` と `X-Robots-Tag` ヘッダー）：ページを取りに来たクローラーに「検索結果に載せないで」と伝える。ページを取りに来て初めて読まれる
+
+つまり2つは役割が違い、`robots.txt` で取りに来るのを止めると、ページの中の noindex は読まれない。どちらも「お願い」で、守らないクローラーもある。今回は技術仕様書 6.2 の方針どおり両方入れたが、本当に見せたくないものはログイン（Access など）で守る。
+
+### clamp() で画面の大きさに合わせる
+
+`clamp(最小, 好ましい値, 最大)` は、「好ましい値」を使いつつ、最小と最大の間に収める CSS の関数。たとえば `--frame-width: clamp(960px, 75vw, 1700px)` は、「画面の幅の75%（`vw` は画面の幅の1%）。ただし 960px より狭くせず、1700px より広くしない」という意味になる。高さは `vh`（画面の高さの1%）を使い、大きい画面では入力欄やボタンも大きくなるようにした。値は `index.css` の CSS 変数にまとめ、全画面から同じものを使う。
+
+---
+
+## 作業中に2回目が起きたこと
+
+### WSL で mount が壊れてコンテナからファイルが見えない（2回目）
+
+#28・#41 のときと同じく、ホストのファイルを mount しているコンテナの中から、ファイルが見えなくなった。11/6 にノートPCで、`backend/tests` は PC 側にあるのに、コンテナの中で `ls tests` を実行すると `No such file or directory` になった。今回も `docker compose up -d --force-recreate backend celery_worker` でコンテナを作り直すと直った。原因はまだ調べていない。mount しているコンテナで「ファイルがない」と言われたら、まずホスト側にあるかを確かめ、あれば作り直しを試す。
+
+### >> .env の追記が前の行にくっつく（2回目）
+
+3回目を起こさないために、追記の前に `tail -c1 .env | od -c` で最後の1文字を確かめる。`\n` と出れば改行で終わっているので、そのまま追記してよい。`\n` 以外の文字が出たら、先に `echo >> .env` で改行を1つ足してから追記する。`od -c` は、ファイルの中身を1文字ずつ、見えない文字も `\n`（改行）・`\r`（Windows の改行の一部）のように表示する。
+
+### git switch が止まっても次のコマンドが進んでしまう
+
+コマンドを複数行まとめて貼り付けると、シェルは1行ずつ順に実行し、前の行が失敗しても次の行に進む。
+
+11/8 にデスクトップの開発フォルダで起きた。`frontend/public/_headers` に未コミットの変更があり、手元の main も古かったので、`git switch main` は「切り替えると変更が上書きされる」として `Aborting` で止まった（ブランチは issue-10-layout のまま）。ところが続けて貼っていた `git pull` と `git switch -c issue-10-csp-enforce` はそのまま実行され、新しいブランチが main ではなく issue-10-layout の上に作られた。結果的に問題はなかったが、思っていたのと違う場所からブランチが作られていた。
+
+対策は2つ。複数のコマンドをまとめて貼らず、1つずつ結果を見てから次を打つ。または `git switch main && git pull && git switch -c <新しいブランチ>` のように `&&` でつなぐ。`&&` は「左が成功したときだけ右を実行する」という意味なので、`git switch` が止まればそこで全部止まる。

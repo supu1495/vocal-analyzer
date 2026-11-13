@@ -229,8 +229,10 @@ def _jst(*args) -> datetime:
     return datetime(*args, tzinfo=ZoneInfo("Asia/Tokyo"))
 
 
-def test_upload_rejected_after_daily_limit(client, db):
+def test_upload_rejected_after_daily_limit(client, db, monkeypatch):
     """1日の上限（10回）までは通り、11回目は 429"""
+    # 開発環境の .env で上限を変えていても結果が変わらないよう、テストの中で決める
+    monkeypatch.setenv("DAILY_UPLOAD_LIMIT", "10")
     _register_and_login(client)
     with patch("upload_limits._now_jst", return_value=_jst(2026, 10, 30, 12, 0)):
         for _ in range(10):
@@ -440,6 +442,20 @@ def test_get_statistics_authenticated(client):
     assert res.status_code == 200
     assert "history" in res.json()
     assert "total_count" in res.json()
+
+
+def test_get_statistics_date_is_jst(client, db):
+    """統計の日付は日本時間で出す。UTC で前の日でも、日本時間で日付が変わっていれば次の日になる（issue #11）"""
+    _register_and_login(client)
+    user = db.query(User).first()
+    record = _create_analysis_record(db, user.id)
+    # UTC の 11/12 16:00 は、日本時間の 11/13 01:00
+    record.created_at = datetime(2026, 11, 12, 16, 0, tzinfo=ZoneInfo("UTC"))
+    db.commit()
+
+    res = client.get("/api/v1/analysis/user/statistics")
+    assert res.status_code == 200
+    assert res.json()["history"][0]["date"] == "11/13"
 
 
 def test_get_statistics_unauthenticated(client):
