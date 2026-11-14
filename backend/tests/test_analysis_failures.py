@@ -48,6 +48,23 @@ def test_to_wav_raises_invalid_format_when_ffmpeg_fails(tmp_path):
     assert exc_info.value.reason == INVALID_FORMAT
 
 
+def test_to_wav_raises_invalid_format_when_ffmpeg_times_out(tmp_path):
+    """ffmpeg が固まったら打ち切り、時間切れ（timeout）ではなく読み込めない（invalid_format）として扱う"""
+    audio_path = tmp_path / "broken.m4a"
+    audio_path.write_bytes(b"not audio")
+
+    with patch(
+        "audio.separator.subprocess.run",
+        side_effect=subprocess.TimeoutExpired("ffmpeg", 120),
+    ) as mock_run:
+        with pytest.raises(AnalysisError) as exc_info:
+            _to_wav(str(audio_path))
+
+    assert exc_info.value.reason == INVALID_FORMAT
+    assert mock_run.call_args.kwargs["timeout"] == 120
+    assert not (tmp_path / "broken.m4a.wav").exists()
+
+
 # ── audio/analyzer.py ─────────────────────────────────────────────────────────
 
 def _analyzer_with_pitch(confidence: list[float]) -> AudioAnalyzer:
