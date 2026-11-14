@@ -1,20 +1,97 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { type AnalysisResult } from '../types'
 import { apiFetch, errorMessage } from '../api'
+
+// 送る前の確認（#13）。最終判断は backend（api/analysis.py）がするので、値はそちらとそろえる
+// 形式は MIME か拡張子のどちらかが合えば通す（MIME はブラウザや OS で名前が違うため）。中身は backend が magic bytes で確かめる
+const ALLOWED_CONTENT_TYPES = ['audio/wav', 'audio/x-wav', 'audio/mpeg', 'audio/mp4', 'audio/x-m4a', 'audio/m4a']
+const ALLOWED_EXTENSIONS = ['.wav', '.mp3', '.m4a']
+const MAX_FILE_MB = 90             // _MAX_FILE_SIZE。Cloudflare の1回100MBまでに余裕を取った値
+const MAX_DURATION_SECONDS = 10 * 60  // _MAX_DURATION_SECONDS
+const MAX_TEXT_LENGTH = 70         // _MAX_TEXT_LENGTH（楽曲名・アーティスト名）
+
+// 結果の確認は、分析中の印の期限（upload_limits.py の34分 = 時間制限17分 ＋ 前の1件の17分）まで続ける
+const POLL_INTERVAL_SECONDS = 5
+const POLL_MAX_MINUTES = 34
+const POLL_MAX = (POLL_MAX_MINUTES * 60) / POLL_INTERVAL_SECONDS  // 408回
+
+// 長さの読み取りが、これだけ待っても終わらなければ「わからない」とする
+const DURATION_READ_TIMEOUT_MS = 5000
+
+function fileExtension(name: string): string {
+  const dot = name.lastIndexOf('.')
+  return dot === -1 ? '' : name.slice(dot).toLowerCase()
+}
+
+// ブラウザで音声を読み、長さ（秒）を返す。読めない・長さが出ない（Infinity 等）・時間切れなら null
+// null のときは画面では止めず、backend の ffprobe に任せる
+function readDurationSeconds(file: File): Promise<number | null> {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(file)
+    const audio = new Audio()
+    let settled = false
+    const finish = (seconds: number | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      URL.revokeObjectURL(url)
+      resolve(seconds)
+    }
+    const timer = setTimeout(() => finish(null), DURATION_READ_TIMEOUT_MS)
+    audio.preload = 'metadata'
+    audio.onloadedmetadata = () => finish(Number.isFinite(audio.duration) ? audio.duration : null)
+    audio.onerror = () => finish(null)
+    audio.src = url
+  })
+}
+
+// 送る前に断る理由。問題がなければ null
+async function rejectReason(f: File): Promise<string | null> {
+  if (!ALLOWED_CONTENT_TYPES.includes(f.type) && !ALLOWED_EXTENSIONS.includes(fileExtension(f.name))) {
+    return 'WAV / MP3 / M4A のみ対応しています。'
+  }
+  if (f.size > MAX_FILE_MB * 1024 * 1024) {
+    return `ファイルが大きすぎます（上限 ${MAX_FILE_MB}MB）。長い曲は m4a や mp3 で送ってください。`
+  }
+  const duration = await readDurationSeconds(f)
+  if (duration !== null && duration > MAX_DURATION_SECONDS) {
+    const limitMinutes = MAX_DURATION_SECONDS / 60
+    return `録音が長すぎます（上限 ${limitMinutes}分）。${limitMinutes}分以内に切って送ってください。`
+  }
+  return null
+}
+
+function formatElapsed(seconds: number): string {
+  const minutes = Math.floor(seconds / 60)
+  return minutes > 0 ? `${minutes}分${seconds % 60}秒` : `${seconds}秒`
+}
 
 export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
   const [dragging, setDragging] = useState(false)
   const [file, setFile] = useState<File | null>(null)
+  const [checking, setChecking] = useState(false)
   const [songTitle, setSongTitle] = useState('')
   const [artistName, setArtistName] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [pollCount, setPollCount] = useState(0)
+  // 何回目に選んだファイルか。長さの読み取り中に別のファイルを選んだとき、古い結果で上書きしないため
+  const latestPickRef = useRef(0)
+  // 長さの確認中は、前に選んだファイルが残っていても送らせない
+  const canSubmit = file !== null && !loading && !checking
 
-  const handleFile = (f: File) => {
-    const allowed = ['audio/wav', 'audio/mpeg', 'audio/mp4', 'audio/x-m4a']
-    if (!allowed.includes(f.type)) { setError('WAV / MP3 / M4A のみ対応しています'); return }
-    setFile(f); setError('')
+  const handleFile = async (f: File) => {
+    const pick = ++latestPickRef.current
+    setChecking(true); setError('')
+    const reason = await rejectReason(f)
+    if (pick !== latestPickRef.current) return
+    setChecking(false)
+    if (reason) {
+      // 断ったファイルを選んだままに見えないよう、選択を外す
+      setFile(null); setError(reason)
+      return
+    }
+    setFile(f)
   }
 
   const handleDrop = (e: React.DragEvent) => {
@@ -33,11 +110,12 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
       // 400（形式・サイズ・長さ・文字数）・429（分析中・回数上限）などはサーバーのメッセージを出す
       if (!res.ok) throw new Error(await errorMessage(res))
       const { task_id } = await res.json()
+      // task_id が無いまま進むと /status/undefined を問い合わせ続ける（9/30 の 404 の件）
+      if (typeof task_id !== 'string' || task_id === '') throw new Error('分析を受け付けられませんでした。もう一度お試しください。')
 
       let analysisId: number | null = null
-      const POLL_MAX = 120
       for (let i = 0; i < POLL_MAX; i++) {
-        await new Promise(resolve => setTimeout(resolve, 5000))
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_SECONDS * 1000))
         setPollCount(i + 1)
         const statusRes = await apiFetch(`/api/v1/analysis/status/${task_id}`)
         if (!statusRes.ok) throw new Error(await errorMessage(statusRes))
@@ -51,7 +129,10 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
         }
       }
 
-      if (analysisId === null) throw new Error('分析がタイムアウトしました')
+      // 画面が確認をやめても、worker の分析は続き、終われば結果は保存される（統計に出る）
+      if (analysisId === null) {
+        throw new Error(`${POLL_MAX_MINUTES}分待っても分析が終わりませんでした。分析が終われば統計に反映されます。`)
+      }
 
       const resultRes = await apiFetch(`/api/v1/analysis/${analysisId}`)
       if (!resultRes.ok) throw new Error(await errorMessage(resultRes))
@@ -90,8 +171,12 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
         <h2 style={{ color: 'white', fontSize: 'var(--heading-size)', fontWeight: '800', margin: '0 0 0.3em' }}>
           分析中{dots}
         </h2>
-        <p style={{ color: '#555', fontSize: 'var(--body-size)', margin: '0 0 var(--block-gap)' }}>
-          AIが歌声を解析しています（最大10分かかる場合があります）
+        <p style={{ color: '#555', fontSize: 'var(--body-size)', margin: '0 0 0.5em' }}>
+          AIが歌声を解析しています。録音の長さの1.3倍ほどかかります（10分の曲で約13分）
+        </p>
+        {/* worker は1件ずつ処理する（--concurrency=1、#32）ため */}
+        <p style={{ color: '#555', fontSize: 'var(--caption-size)', margin: '0 0 var(--block-gap)' }}>
+          ほかの人の分析が先にあると、順番待ちで長くなることがあります
         </p>
 
         {(songTitle || artistName) && (
@@ -105,7 +190,7 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
         )}
 
         {pollCount > 0 && (
-          <p style={{ color: '#333', fontSize: 'var(--caption-size)', margin: 0 }}>{pollCount * 5}秒経過 / 最大600秒</p>
+          <p style={{ color: '#333', fontSize: 'var(--caption-size)', margin: 0 }}>{formatElapsed(pollCount * POLL_INTERVAL_SECONDS)}経過 / 最大{POLL_MAX_MINUTES}分</p>
         )}
       </div>
     )
@@ -146,7 +231,7 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
         ) : (
           <>
             <p style={{ color: '#aaa', fontSize: 'var(--body-size)', margin: '0 0 0.25em' }}>音声ファイルをドロップ</p>
-            <p style={{ color: '#555', fontSize: 'var(--label-size)', margin: 0 }}>または クリックして選択（WAV / MP3 / M4A）</p>
+            <p style={{ color: '#555', fontSize: 'var(--label-size)', margin: 0 }}>または クリックして選択（WAV / MP3 / M4A・{MAX_DURATION_SECONDS / 60}分・{MAX_FILE_MB}MB まで）</p>
           </>
         )}
       </div>
@@ -160,7 +245,8 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
             <label style={{ color: '#666', fontSize: 'var(--label-size)', letterSpacing: '0.1em', display: 'block', marginBottom: '0.4em' }}>
               {label}（任意）
             </label>
-            <input value={value} onChange={(e) => setter(e.target.value)} placeholder={placeholder}
+            {/* backend も70文字を超えたら 400 にする。JS は絵文字を2文字と数えるので、backend より先に止まることはあっても逆はない */}
+            <input value={value} onChange={(e) => setter(e.target.value)} placeholder={placeholder} maxLength={MAX_TEXT_LENGTH}
               style={{ width: '100%', height: 'var(--input-height)', padding: '0 0.9em', background: '#0d0d1a', border: '1px solid #2a2a3e',
                 borderRadius: '10px', color: 'white', fontSize: 'var(--body-size)', outline: 'none' }} />
           </div>
@@ -169,14 +255,14 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
 
       {error && <p style={{ color: '#f87171', fontSize: 'var(--label-size)', margin: '0 0 var(--field-gap)', textAlign: 'center' }}>{error}</p>}
 
-      <button onClick={handleSubmit} disabled={!file || loading} style={{
+      <button onClick={handleSubmit} disabled={!canSubmit} style={{
         width: '100%', height: 'var(--button-height)',
-        background: file && !loading ? 'linear-gradient(135deg, #c084fc, #818cf8)' : '#1e1e2e',
+        background: canSubmit ? 'linear-gradient(135deg, #c084fc, #818cf8)' : '#1e1e2e',
         border: 'none', borderRadius: '12px',
-        color: file && !loading ? 'white' : '#444', fontSize: 'var(--body-size)', fontWeight: '700',
-        cursor: file && !loading ? 'pointer' : 'not-allowed', transition: 'all 0.2s ease', letterSpacing: '0.05em',
+        color: canSubmit ? 'white' : '#444', fontSize: 'var(--body-size)', fontWeight: '700',
+        cursor: canSubmit ? 'pointer' : 'not-allowed', transition: 'all 0.2s ease', letterSpacing: '0.05em',
       }}>
-        {loading ? '分析中...' : '分析を開始する →'}
+        {loading ? '分析中...' : checking ? 'ファイルを確かめています...' : '分析を開始する →'}
       </button>
       {/* ボタンのすぐ下に置く */}
       <p style={{ color: '#555', fontSize: 'var(--caption-size)', textAlign: 'center', margin: '1em 0 0' }}>
