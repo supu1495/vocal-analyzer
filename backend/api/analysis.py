@@ -3,8 +3,12 @@
 音声ファイルのアップロード・分析結果の取得・統計情報の取得を担当する
 """
 
+# asyncio: ffprobe の実行を別スレッドに逃がすため（upload_audio は async def なので、そのまま待つと backend 全体が止まる）
+import asyncio
 import logging
 import os
+# subprocess: 録音の長さを ffprobe（コンテナに入っている外部プログラム）で測るため
+import subprocess
 import uuid
 # datetime: 日付を作る関数の引数の型 ／ timezone: SQLite から返るタイムゾーンなしの日時を UTC とみなすため
 from datetime import datetime, timezone
@@ -36,8 +40,24 @@ router = APIRouter(prefix="/api/v1/analysis", tags=["analysis"])
 _UPLOAD_DIR = "/tmp/vocal_analyzer"
 
 # アップロード上限とストリーミング読み込みのチャンクサイズ
-_MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+# Cloudflare（Free・Pro）は1回のリクエストが100MBまで。multipart の区切りの分も見て余裕を取る（#13）
+_MAX_FILE_SIZE = 90 * 1024 * 1024  # 90MB
 _CHUNK_SIZE = 1024 * 1024           # 1MB
+
+# 楽曲名・アーティスト名の上限（DB は255文字。分析が終わった後の保存で失敗しないよう、受け付け時に断る）
+_MAX_TEXT_LENGTH = 70
+
+# 形式の1次フィルタ。MIME はブラウザや OS で名前が違う（audio/x-wav・audio/m4a 等）ため、拡張子が合っていても通す
+# どちらも偽装できるので、中身は _validate_audio_magic_bytes で確かめる
+_ALLOWED_CONTENT_TYPES = {"audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/m4a"}
+_ALLOWED_EXTENSIONS = {".wav", ".mp3", ".m4a"}
+
+# 分析できる録音の長さの上限（#13）。分析は録音の約1.3倍かかり、celery_app.py の時間制限はこれに合わせる
+_MAX_DURATION_SECONDS = 10 * 60
+# ffprobe が壊れたファイルで固まったときに打ち切るまでの秒数。普通は1秒かからない
+_FFPROBE_TIMEOUT_SECONDS = 30
+
+_UNREADABLE_AUDIO_DETAIL = "音声ファイルを読み込めませんでした。別の形式で試してください。"
 
 # 統計の日付は日本時間で区切る（DB は UTC で保存している。upload_limits.py の1日の回数と同じ区切り）
 # upload_limits.py の _JST はファイルの中だけで使う約束（名前が _ で始まる）なので、借りずに同じ定義を書く
@@ -75,7 +95,8 @@ async def upload_audio(
         logger.warning("Upload rejected (disclaimer not accepted): user_id=%d", current_user.id)
         raise HTTPException(status_code=403, detail="利用を始める前に、免責事項への同意が必要です。")
 
-    _validate_audio_content_type(audio_file)
+    _validate_text_lengths(song_title, artist_name)
+    _validate_audio_type(audio_file)
 
     retry_after = daily_limit_retry_after(current_user.id)
     if retry_after is not None:
@@ -101,12 +122,17 @@ async def upload_audio(
         current_user.id, _file_extension(audio_file), audio_file.content_type,
     )
 
+    tmp_path = None
     try:
         tmp_path = await _stream_to_shared_volume(audio_file)
+        await _validate_audio_duration(tmp_path)
         task = analyze_audio_task.delay(tmp_path, song_title, artist_name, current_user.id)
     except Exception:
         # タスクに登録できなかったときは、分析中の印をここで外す（登録後は tasks.py の finally で外す）
         release_analysis_slot(current_user.id)
+        # 保存まで済んだファイルは、ここで消す（登録後は tasks.py が消す）。書き途中のファイルは _stream_to_shared_volume が消す
+        if tmp_path is not None and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
         raise
 
     # 数えるのはタスクに登録できたときだけ（弾かれたファイルは数えない）
@@ -249,10 +275,30 @@ def get_analysis(
 # ── プライベート関数 ──────────────────────────────────────────────────────────
 
 
-def _validate_audio_content_type(audio_file: UploadFile) -> None:
-    """ブラウザ側の Content-Type で1次フィルタする（偽装可能なため後段の magic bytes 検証と併用する）"""
-    allowed_types = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/x-m4a"]
-    if audio_file.content_type not in allowed_types:
+def _validate_text_lengths(song_title: str, artist_name: str) -> None:
+    """楽曲名・アーティスト名が _MAX_TEXT_LENGTH 文字以下か確かめる（ファイルを受け取る前に断るため最初に呼ぶ）"""
+    too_long = [
+        label
+        for label, value in (("楽曲名", song_title), ("アーティスト名", artist_name))
+        if len(value) > _MAX_TEXT_LENGTH
+    ]
+    if too_long:
+        logger.warning(
+            "Upload rejected (text too long): song_title_len=%d artist_name_len=%d",
+            len(song_title), len(artist_name),
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"{'・'.join(too_long)}は{_MAX_TEXT_LENGTH}文字以下にしてください。",
+        )
+
+
+def _validate_audio_type(audio_file: UploadFile) -> None:
+    """Content-Type か拡張子で1次フィルタする（どちらも偽装可能なため後段の magic bytes 検証と併用する）"""
+    if (
+        audio_file.content_type not in _ALLOWED_CONTENT_TYPES
+        and _file_extension(audio_file) not in _ALLOWED_EXTENSIONS
+    ):
         logger.warning(
             "Upload rejected (invalid content-type): extension=%s content_type=%s",
             _file_extension(audio_file), audio_file.content_type,
@@ -302,14 +348,17 @@ async def _stream_to_shared_volume(audio_file: UploadFile) -> str:
     """
     アップロードファイルをチャンク単位で共有ボリュームに書き込む。
 
-    50MB を超えた時点で書き込みを中止し、書き途中のファイルを削除して拒否する。
+    _MAX_FILE_SIZE を超えた時点で書き込みを中止し、書き途中のファイルを削除して拒否する。
     最初のチャンクで magic bytes 検証を行い、Content-Type 偽装に対する追加防御とする。
     メモリ使用量を _CHUNK_SIZE 程度に抑えるためファイル全体を一括で読み込まない。
 
     ファイル名衝突を避けるため UUID をプレフィックスに付ける。
     """
     os.makedirs(_UPLOAD_DIR, exist_ok=True)
-    suffix = os.path.splitext(audio_file.filename)[1]
+    # 利用者のファイル名から取る拡張子は、知っているものだけ残す（MIME だけで通ったファイルは拡張子なし）
+    # 拡張子が無ければ separator.py の _to_wav が ffmpeg で WAV に変換するので、分析には影響しない
+    extension = _file_extension(audio_file)
+    suffix = extension if extension in _ALLOWED_EXTENSIONS else ""
     tmp_path = os.path.join(_UPLOAD_DIR, f"{uuid.uuid4()}{suffix}")
 
     total = 0
@@ -328,7 +377,10 @@ async def _stream_to_shared_volume(audio_file: UploadFile) -> str:
                     )
                     raise HTTPException(
                         status_code=400,
-                        detail="ファイルサイズが大きすぎます。50MB以下にしてください。",
+                        detail=(
+                            f"ファイルが大きすぎます（上限 {_MAX_FILE_SIZE // (1024 * 1024)}MB）。"
+                            "長い曲は m4a や mp3 で送ってください。"
+                        ),
                     )
                 f.write(chunk)
         return tmp_path
@@ -337,6 +389,54 @@ async def _stream_to_shared_volume(audio_file: UploadFile) -> str:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
         raise
+
+
+def _probe_duration_seconds(path: str) -> float:
+    """ffprobe で録音の長さ（秒）を測る。読めないときは HTTPException(400)
+
+    引数はリストで渡し、shell を通さない（ファイル名がコマンドとして解釈されないように）。
+    path は _stream_to_shared_volume が作った絶対パスなので、"-" で始まってオプションと取り違えられることもない
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=_FFPROBE_TIMEOUT_SECONDS,
+        )
+        # 長さが分からない形式では "N/A" が返り、float() が ValueError を投げる
+        return float(result.stdout.strip())
+    except subprocess.CalledProcessError as e:
+        # stderr には曲のタグ情報などが入りうるため、終了コードだけをログに出す（separator.py と同じ）
+        logger.warning("Upload rejected (ffprobe failed): returncode=%d", e.returncode)
+    except subprocess.TimeoutExpired:
+        # timeout を超えると subprocess.run が子プロセスを kill してからこの例外を投げる
+        logger.warning("Upload rejected (ffprobe timeout): timeout=%d", _FFPROBE_TIMEOUT_SECONDS)
+    except ValueError:
+        logger.warning("Upload rejected (duration unknown)")
+    raise HTTPException(status_code=400, detail=_UNREADABLE_AUDIO_DETAIL)
+
+
+async def _validate_audio_duration(path: str) -> None:
+    """録音が _MAX_DURATION_SECONDS 以下か確かめる。超えたら HTTPException(400)
+
+    ffprobe（最大 _FFPROBE_TIMEOUT_SECONDS 秒）を別スレッドで動かし、その間もほかのリクエストを処理できるようにする
+    """
+    duration = await asyncio.to_thread(_probe_duration_seconds, path)
+    if duration > _MAX_DURATION_SECONDS:
+        logger.warning(
+            "Upload rejected (too long): duration=%.1f limit=%d", duration, _MAX_DURATION_SECONDS,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"録音が長すぎます（上限 {_MAX_DURATION_SECONDS // 60}分）。{_MAX_DURATION_SECONDS // 60}分以内に切って送ってください。",
+        )
 
 
 def _calculate_growth_rate(pitch_values: list[float]) -> int:
