@@ -221,7 +221,12 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
         }}
       >
         <input id="fileInput" type="file" accept=".wav,.mp3,.m4a,audio/*" style={{ display: 'none' }}
-          onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])} />
+          onChange={(e) => {
+            const picked = e.target.files?.[0]
+            // 選択を空に戻す。同じファイルを選び直すとブラウザは change を出さないため、断られたあとに選び直せなくなる
+            e.target.value = ''
+            if (picked) handleFile(picked)
+          }} />
         <div style={{ fontSize: 'var(--heading-size)', marginBottom: '0.3em' }}>{file ? '🎵' : '🎤'}</div>
         {file ? (
           <>
