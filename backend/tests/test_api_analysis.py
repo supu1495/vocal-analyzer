@@ -348,7 +348,8 @@ def test_upload_slot_has_expiry(client, db, fake_redis):
     with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task):
         _upload(client)
     ttl = fake_redis.ttl(f"active_task:{user.id}")
-    assert 0 < ttl <= 20 * 60
+    # hard time limit（17分）の分析が前に1件あっても消えない長さ
+    assert 33 * 60 < ttl <= 34 * 60
 
 
 def test_task_releases_slot_when_analysis_fails(fake_redis, tmp_path):
