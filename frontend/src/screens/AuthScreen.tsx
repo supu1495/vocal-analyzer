@@ -1,5 +1,6 @@
 import { useState, useEffect, type CSSProperties } from 'react'
-import { API_BASE, type AuthState } from '../types'
+import { type AuthState } from '../types'
+import { apiFetch, errorMessage } from '../api'
 
 // ログイン制限の解除時刻（ミリ秒）を保存するキー。再読み込みしても制限表示を復元するため
 const LOCKED_UNTIL_KEY = 'vocal-analyzer-login-locked-until'
@@ -48,10 +49,12 @@ function formatClockTime(time: number): string {
 
 export function AuthScreen({
   mode,
+  notice = '',
   onSuccess,
   onToggle,
 }: {
   mode: 'login' | 'register'
+  notice?: string
   onSuccess: (auth: AuthState) => void
   onToggle: () => void
 }) {
@@ -91,23 +94,25 @@ export function AuthScreen({
     }
     setLoading(true)
     try {
-      const endpoint = isLogin ? `${API_BASE}/api/v1/auth/login` : `${API_BASE}/api/v1/auth/register`
-      const res = await fetch(endpoint, {
+      const path = isLogin ? '/api/v1/auth/login' : '/api/v1/auth/register'
+      const res = await apiFetch(path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+        // パスワード違いでも 401 が返るので、期限切れの処理は呼ばない
+        skipSessionExpired: true,
         // 招待コードはコピー時に前後の空白・改行が入りやすく、1文字でも違うと 403 になるため trim する
         body: JSON.stringify(isLogin ? { email, password } : { email, password, invite_code: inviteCode.trim() }),
       })
-      const data = await res.json()
       if (res.status === 429) {
         const until = lockedUntilFromRetryAfter(res.headers.get('Retry-After'))
         saveLockedUntil(until)
         setLockedUntil(until)
-        setError(data.detail ?? 'ログイン試行回数が上限を超えました。しばらくしてから再試行してください。')
+        setError(await errorMessage(res, 'ログイン試行回数が上限を超えました。しばらくしてから再試行してください。'))
         return
       }
-      if (!res.ok) throw new Error(data.detail ?? 'エラーが発生しました。')
+      // 422（メールアドレスの形式など）は detail が配列なので、errorMessage で欄の名前にまとめる
+      if (!res.ok) throw new Error(await errorMessage(res, 'エラーが発生しました。'))
+      const data = await res.json()
       onSuccess({ userId: data.user_id, email: data.email, disclaimerAccepted: data.disclaimer_accepted })
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'エラーが発生しました。')
@@ -135,6 +140,8 @@ export function AuthScreen({
         <p style={{ color: '#555', fontSize: 'var(--body-size)', margin: 0 }}>
           {isLogin ? 'メールアドレスとパスワードでログインしてください。' : '招待コードを受け取った方のみ登録できます。'}
         </p>
+        {/* ログインしたあとの操作で 401 になって戻ってきたときだけ出す。入力の誤り（error）とは別の案内なので色を変える */}
+        {notice && <p style={{ color: '#fbbf24', fontSize: 'var(--label-size)', margin: '1em 0 0' }}>{notice}</p>}
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--field-gap)', marginBottom: 'var(--field-gap)' }}>

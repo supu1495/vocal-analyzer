@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { API_BASE, type Screen, type AuthState, type AnalysisResult } from './types'
+import { type Screen, type AuthState, type AnalysisResult } from './types'
+import { apiFetch, setSessionExpiredHandler, SESSION_EXPIRED_MESSAGE } from './api'
 import { AuthScreen } from './screens/AuthScreen'
 import { UploadScreen } from './screens/UploadScreen'
 import { ResultScreen } from './screens/ResultScreen'
@@ -13,11 +14,27 @@ export default function App() {
   const [auth, setAuth] = useState<AuthState | null>(null)
   const [screen, setScreen] = useState<Screen>('login')
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null)
+  // ログイン画面の上に出す案内（ログインしたあとの操作で 401 が返ったときだけ入れる）
+  const [authNotice, setAuthNotice] = useState('')
+
+  // ログインしたあとの操作で 401 が返ったら、ログイン画面に戻して再ログインを案内する
+  // 使うのは state の setter だけ（再描画で変わらない）なので、登録は最初の1回でよい
+  useEffect(() => {
+    setSessionExpiredHandler(() => {
+      localStorage.removeItem(AUTH_HINT_KEY)
+      setAuth(null)
+      setAnalysisResult(null)
+      setAuthNotice(SESSION_EXPIRED_MESSAGE)
+      setScreen('login')
+    })
+    return () => setSessionExpiredHandler(null)
+  }, [])
 
   useEffect(() => {
     if (localStorage.getItem(AUTH_HINT_KEY) !== 'yes') return
 
-    fetch(`${API_BASE}/api/v1/auth/me`, { credentials: 'include' })
+    // ログインしていない人には必ず 401 が返るので、期限切れの案内は出さず、ふつうのログイン画面のままにする
+    apiFetch('/api/v1/auth/me', { skipSessionExpired: true })
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data) {
@@ -32,12 +49,15 @@ export default function App() {
 
   const handleAuthSuccess = (newAuth: AuthState) => {
     localStorage.setItem(AUTH_HINT_KEY, 'yes')
+    setAuthNotice('')
     setAuth(newAuth)
     setScreen('upload')
   }
 
   const handleLogout = () => {
-    fetch(`${API_BASE}/api/v1/auth/logout`, { method: 'POST', credentials: 'include' })
+    // 期限が切れたあとのログアウトも 401 になるが、どちらにしてもログイン画面に戻すので案内は出さない
+    apiFetch('/api/v1/auth/logout', { method: 'POST', skipSessionExpired: true })
+      .catch(() => {})
       .finally(() => {
         localStorage.removeItem(AUTH_HINT_KEY)
         setAuth(null)
@@ -95,7 +115,7 @@ export default function App() {
 
       {/* 各画面は、この枠の中で自分の幅にして中央に寄せる。縦の flex なので、.centered-block の画面は縦の真ん中に来る */}
       <main style={{ flex: 1, width: '100%', maxWidth: 'var(--frame-width)', margin: '0 auto', padding: '0 var(--frame-gutter)', display: 'flex', flexDirection: 'column' }}>
-        {screen === 'login' && <AuthScreen mode="login" onSuccess={handleAuthSuccess} onToggle={() => setScreen('register')} />}
+        {screen === 'login' && <AuthScreen mode="login" notice={authNotice} onSuccess={handleAuthSuccess} onToggle={() => { setAuthNotice(''); setScreen('register') }} />}
         {screen === 'register' && <AuthScreen mode="register" onSuccess={handleAuthSuccess} onToggle={() => setScreen('login')} />}
         {needsDisclaimer && <DisclaimerScreen onAccepted={handleDisclaimerAccepted} />}
         {!needsDisclaimer && screen === 'upload' && auth && <UploadScreen onResult={handleResult} />}

@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { API_BASE, type AnalysisResult } from '../types'
+import { type AnalysisResult } from '../types'
+import { apiFetch, errorMessage } from '../api'
 
 export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => void }) {
   const [dragging, setDragging] = useState(false)
@@ -27,13 +28,10 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
     try {
       const form = new FormData()
       form.append('audio_file', file)
-      const url = `${API_BASE}/api/v1/analysis/upload?song_title=${encodeURIComponent(songTitle)}&artist_name=${encodeURIComponent(artistName)}`
-      const res = await fetch(url, { method: 'POST', credentials: 'include', body: form })
-      if (!res.ok) {
-        // 429（分析中・回数上限）などはサーバーのメッセージを出す。detail が文字列でない（422 等）・JSON でないときは番号だけ出す
-        const data = await res.json().catch(() => null)
-        throw new Error(typeof data?.detail === 'string' ? data.detail : `サーバーエラー: ${res.status}`)
-      }
+      const path = `/api/v1/analysis/upload?song_title=${encodeURIComponent(songTitle)}&artist_name=${encodeURIComponent(artistName)}`
+      const res = await apiFetch(path, { method: 'POST', body: form })
+      // 400（形式・サイズ・長さ・文字数）・429（分析中・回数上限）などはサーバーのメッセージを出す
+      if (!res.ok) throw new Error(await errorMessage(res))
       const { task_id } = await res.json()
 
       let analysisId: number | null = null
@@ -41,8 +39,8 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
       for (let i = 0; i < POLL_MAX; i++) {
         await new Promise(resolve => setTimeout(resolve, 5000))
         setPollCount(i + 1)
-        const statusRes = await fetch(`${API_BASE}/api/v1/analysis/status/${task_id}`, { credentials: 'include' })
-        if (!statusRes.ok) throw new Error(`ステータス確認エラー: ${statusRes.status}`)
+        const statusRes = await apiFetch(`/api/v1/analysis/status/${task_id}`)
+        if (!statusRes.ok) throw new Error(await errorMessage(statusRes))
         const statusData = await statusRes.json()
         if (statusData.status === 'SUCCESS') {
           analysisId = statusData.analysis_id
@@ -55,8 +53,8 @@ export function UploadScreen({ onResult }: { onResult: (r: AnalysisResult) => vo
 
       if (analysisId === null) throw new Error('分析がタイムアウトしました')
 
-      const resultRes = await fetch(`${API_BASE}/api/v1/analysis/${analysisId}`, { credentials: 'include' })
-      if (!resultRes.ok) throw new Error(`結果取得エラー: ${resultRes.status}`)
+      const resultRes = await apiFetch(`/api/v1/analysis/${analysisId}`)
+      if (!resultRes.ok) throw new Error(await errorMessage(resultRes))
       const data: AnalysisResult = await resultRes.json()
       onResult({ ...data, song_title: songTitle, artist_name: artistName })
     } catch (e: unknown) {
