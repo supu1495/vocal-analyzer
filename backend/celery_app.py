@@ -34,7 +34,9 @@ celery_app.conf.update(
     # タスクが固まったときに永遠に走り続けないように時間制限を入れる
     # soft: SoftTimeLimitExceeded 例外を発生（tasks.py の try/finally で後片付け可能）
     # hard: プロセス強制kill（後片付けなし）
-    # フロントのポーリング上限（120回 × 5秒 = 10分）に合わせている
-    task_soft_time_limit=540,  # 9分
-    task_time_limit=600,       # 10分
+    # 録音の上限（api/analysis.py の _MAX_DURATION_SECONDS = 10分）に合わせている（#13）
+    # 分析は録音の約1.3倍かかる（5分13秒のライブ版で約408秒、2026-11-13 実測）。10分 × 1.3 ≒ 13分に余裕を足した
+    # upload_limits.py の分析中の印の期限と、フロントの結果確認の長さは、この hard の値をもとに決めている
+    task_soft_time_limit=16 * 60,  # 16分
+    task_time_limit=17 * 60,       # 17分
 )

@@ -13,6 +13,10 @@ from demucs.apply import apply_model
 
 from audio.errors import INVALID_FORMAT, AnalysisError
 
+# ffmpeg の WAV 変換を打ち切るまでの秒数。10分の m4a の変換は普通数秒（要確認：実測していない）
+# 壊れたファイルで固まると、Celery の時間制限まで worker が止まり、ほかの人が順番待ちになるため
+_FFMPEG_TIMEOUT_SECONDS = 120
+
 
 def _to_wav(audio_path: str) -> tuple[str, bool]:
     """WAV 以外の形式を ffmpeg で WAV に変換する。
@@ -26,13 +30,24 @@ def _to_wav(audio_path: str) -> tuple[str, bool]:
             ["ffmpeg", "-y", "-i", audio_path, wav_path],
             check=True,
             capture_output=True,
+            timeout=_FFMPEG_TIMEOUT_SECONDS,
         )
     except subprocess.CalledProcessError as e:
         # stderr には曲のタグ情報などが入りうるため、ログ用のメッセージには終了コードだけを入れる
-        if os.path.exists(wav_path):
-            os.remove(wav_path)
+        _remove_if_exists(wav_path)
         raise AnalysisError(INVALID_FORMAT, f"ffmpeg failed: returncode={e.returncode}") from e
+    except subprocess.TimeoutExpired as e:
+        # 固まるのは壊れたファイルのことが多いため、時間切れ（TIMEOUT の「短い録音で」）ではなく読み込めない扱いにする
+        # timeout を超えると subprocess.run が ffmpeg を kill してからこの例外を投げる
+        _remove_if_exists(wav_path)
+        raise AnalysisError(INVALID_FORMAT, f"ffmpeg timeout: timeout={_FFMPEG_TIMEOUT_SECONDS}") from e
     return wav_path, True
+
+
+def _remove_if_exists(path: str) -> None:
+    """変換途中のファイルを残さない"""
+    if os.path.exists(path):
+        os.remove(path)
 
 
 class VocalSeparator:

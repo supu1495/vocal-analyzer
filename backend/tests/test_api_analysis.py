@@ -9,12 +9,18 @@ Phase 8 以降はアップロードが非同期（Celery タスク）になっ�
 
 import io
 import os
+import subprocess
 import wave
 from unittest.mock import patch, MagicMock
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+from fastapi import HTTPException
+
+# 下の autouse フィクスチャで差し替える前の、本物の関数を持っておく（ffprobe の呼び方のテストで使う）
+from api.analysis import _probe_duration_seconds
 from auth_utils import get_task_owner, save_task_owner
 from models import AnalysisResult, User
 from task_failures import save_failure_reason
@@ -22,6 +28,17 @@ from upload_limits import release_analysis_slot
 
 
 # ── ヘルパー ───────────────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def probe_duration():
+    """録音の長さは、どのテストでも ffprobe を動かさずに60秒とする
+
+    テスト用の WAV は短いうえ、テストの環境に ffprobe があるとは限らないため。
+    長さで弾く動きを見るテストは、この mock の return_value を変える
+    """
+    with patch("api.analysis._probe_duration_seconds", return_value=60.0) as mock_probe:
+        yield mock_probe
+
 
 def _create_minimal_wav() -> bytes:
     """Pythonの標準waveモジュールで作る最小WAVファイル（ディスクを使わずメモリ上で生成）"""
@@ -85,10 +102,150 @@ def test_upload_invalid_file_type(client):
 
 
 def test_upload_file_too_large(client):
+    """上限を1バイト超えたら断る。先頭は WAV にして、magic bytes ではなくサイズで弾かれることを確かめる"""
     _register_and_login(client)
-    oversized = b"\x00" * (50 * 1024 * 1024 + 1)
+    header = _create_minimal_wav()
+    oversized = header + b"\x00" * (90 * 1024 * 1024 + 1 - len(header))
     res = _upload(client, content=oversized)
     assert res.status_code == 400
+    assert "90MB" in res.json()["detail"]
+
+
+def test_upload_accepts_known_extension_with_other_content_type(client):
+    """MIME がブラウザ独自の名前でも、拡張子が合っていれば通す（中身は magic bytes で確かめる）"""
+    _register_and_login(client)
+    mock_task = MagicMock()
+    mock_task.id = "test-task-id"
+    with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task):
+        res = _upload(client, filename="test.wav", content_type="application/octet-stream")
+    assert res.status_code == 200
+
+
+def test_upload_rejects_renamed_text_file(client):
+    """拡張子だけ .wav に変えたテキストは、中身（magic bytes）で断る"""
+    _register_and_login(client)
+    res = _upload(client, filename="fake.wav", content_type="audio/wav", content=b"this is not an audio file")
+    assert res.status_code == 400
+    assert "一致しません" in res.json()["detail"]
+
+
+def test_upload_rejects_too_long_title_and_artist(client):
+    """楽曲名・アーティスト名は70文字まで。両方長いときはまとめて知らせる"""
+    _register_and_login(client)
+    with patch("api.analysis.analyze_audio_task.delay") as mock_delay:
+        res = client.post(
+            "/api/v1/analysis/upload",
+            params={"song_title": "あ" * 71, "artist_name": "い" * 71},
+            files={"audio_file": ("test.wav", _create_minimal_wav(), "audio/wav")},
+        )
+    assert res.status_code == 400
+    assert "楽曲名・アーティスト名" in res.json()["detail"]
+    mock_delay.assert_not_called()
+
+
+def test_upload_accepts_title_of_max_length(client):
+    """ちょうど70文字は通す"""
+    _register_and_login(client)
+    mock_task = MagicMock()
+    mock_task.id = "test-task-id"
+    with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task):
+        res = client.post(
+            "/api/v1/analysis/upload",
+            params={"song_title": "あ" * 70, "artist_name": "い" * 70},
+            files={"audio_file": ("test.wav", _create_minimal_wav(), "audio/wav")},
+        )
+    assert res.status_code == 200
+
+
+# ── 録音の長さ（ffprobe） ──────────────────────────────────────────────────────
+
+def test_upload_rejects_too_long_audio(client, probe_duration, tmp_path, monkeypatch):
+    """10分を超えたら、タスクに登録せずに断る。保存したファイルは消し、分析中の印も外す"""
+    monkeypatch.setattr("api.analysis._UPLOAD_DIR", str(tmp_path))
+    _register_and_login(client)
+    probe_duration.return_value = 600.1
+
+    with patch("api.analysis.analyze_audio_task.delay") as mock_delay:
+        res = _upload(client)
+    assert res.status_code == 400
+    assert "10分" in res.json()["detail"]
+    mock_delay.assert_not_called()
+    assert list(tmp_path.iterdir()) == []
+
+    probe_duration.return_value = 60.0
+    mock_task = MagicMock()
+    mock_task.id = "test-task-id"
+    with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task):
+        assert _upload(client).status_code == 200
+
+
+def test_upload_accepts_audio_of_max_duration(client, probe_duration):
+    """ちょうど10分は通す"""
+    _register_and_login(client)
+    probe_duration.return_value = 600.0
+    mock_task = MagicMock()
+    mock_task.id = "test-task-id"
+    with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task):
+        assert _upload(client).status_code == 200
+
+
+def test_upload_deletes_file_when_probe_fails(client, probe_duration, tmp_path, monkeypatch):
+    """ffprobe が読めないファイルも、保存したファイルを消して断る"""
+    monkeypatch.setattr("api.analysis._UPLOAD_DIR", str(tmp_path))
+    _register_and_login(client)
+    probe_duration.side_effect = HTTPException(status_code=400, detail="読み込めませんでした")
+
+    res = _upload(client)
+    assert res.status_code == 400
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_upload_saves_unknown_extension_without_suffix(client):
+    """MIME だけで通ったファイルは、利用者のファイル名の拡張子を使わずに保存する"""
+    _register_and_login(client)
+    mock_task = MagicMock()
+    mock_task.id = "test-task-id"
+    with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task) as mock_delay:
+        res = _upload(client, filename="song.weird", content_type="audio/wav")
+    assert res.status_code == 200
+    saved_path = mock_delay.call_args.args[0]
+    assert os.path.splitext(saved_path)[1] == ""
+    os.unlink(saved_path)
+
+
+def test_probe_duration_passes_args_as_list_without_shell():
+    """ffprobe には引数を一覧で渡し、shell を通さず、時間の上限を付ける"""
+    completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="313.456000\n", stderr="")
+    with patch("api.analysis.subprocess.run", return_value=completed) as mock_run:
+        assert _probe_duration_seconds("/tmp/vocal_analyzer/x.m4a") == 313.456
+
+    args, kwargs = mock_run.call_args
+    assert isinstance(args[0], list)
+    assert args[0][0] == "ffprobe"
+    assert args[0][-1] == "/tmp/vocal_analyzer/x.m4a"
+    assert kwargs.get("shell", False) is False
+    assert kwargs["timeout"] == 30
+
+
+@pytest.mark.parametrize("side_effect", [
+    subprocess.CalledProcessError(1, "ffprobe"),
+    subprocess.TimeoutExpired("ffprobe", 30),
+])
+def test_probe_duration_rejects_when_ffprobe_fails(side_effect):
+    """ffprobe の失敗・時間切れは、読み込めないファイルとして 400"""
+    with patch("api.analysis.subprocess.run", side_effect=side_effect):
+        with pytest.raises(HTTPException) as exc_info:
+            _probe_duration_seconds("/tmp/vocal_analyzer/x.m4a")
+    assert exc_info.value.status_code == 400
+
+
+def test_probe_duration_rejects_unknown_duration():
+    """長さが分からない（N/A）ときも 400"""
+    completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="N/A\n", stderr="")
+    with patch("api.analysis.subprocess.run", return_value=completed):
+        with pytest.raises(HTTPException) as exc_info:
+            _probe_duration_seconds("/tmp/vocal_analyzer/x.m4a")
+    assert exc_info.value.status_code == 400
 
 
 def test_upload_success(client):
@@ -191,7 +348,8 @@ def test_upload_slot_has_expiry(client, db, fake_redis):
     with patch("api.analysis.analyze_audio_task.delay", return_value=mock_task):
         _upload(client)
     ttl = fake_redis.ttl(f"active_task:{user.id}")
-    assert 0 < ttl <= 20 * 60
+    # hard time limit（17分）の分析が前に1件あっても消えない長さ
+    assert 33 * 60 < ttl <= 34 * 60
 
 
 def test_task_releases_slot_when_analysis_fails(fake_redis, tmp_path):

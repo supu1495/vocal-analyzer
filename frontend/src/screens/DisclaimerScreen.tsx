@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { API_BASE } from '../types'
+import { apiFetch, errorMessage } from '../api'
 
 const NOTICES = [
   '本システムの分析結果はあくまで参考情報です。医学的診断や専門的な判断には使用できません。',
@@ -15,8 +15,8 @@ export function DisclaimerScreen({ onAccepted }: { onAccepted: () => void }) {
   const handleAccept = async () => {
     setLoading(true); setError('')
     try {
-      const res = await fetch(`${API_BASE}/api/v1/auth/disclaimer`, { method: 'POST', credentials: 'include' })
-      if (!res.ok) throw new Error(`サーバーエラー: ${res.status}`)
+      const res = await apiFetch('/api/v1/auth/disclaimer', { method: 'POST' })
+      if (!res.ok) throw new Error(await errorMessage(res))
       onAccepted()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'エラーが発生しました。')

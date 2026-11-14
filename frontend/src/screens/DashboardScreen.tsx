@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { API_BASE, calcTotalScore, type AnalysisResult, type Statistics } from '../types'
+import { calcTotalScore, type AnalysisResult, type Statistics } from '../types'
+import { apiFetch, errorMessage } from '../api'
 import { LineChart } from '../components/LineChart'
 
 export function DashboardScreen({ latestResult, onBack }: {
@@ -10,8 +11,8 @@ export function DashboardScreen({ latestResult, onBack }: {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/v1/analysis/user/statistics`, { credentials: 'include' })
-      .then(res => { if (!res.ok) throw new Error(`サーバーエラー: ${res.status}`); return res.json() })
+    apiFetch('/api/v1/analysis/user/statistics')
+      .then(async res => { if (!res.ok) throw new Error(await errorMessage(res)); return res.json() })
       .then((data: Statistics) => setStats(data))
       .catch(e => setError(e instanceof Error ? e.message : '統計の取得に失敗しました'))
       .finally(() => setLoading(false))
