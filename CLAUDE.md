@@ -101,7 +101,7 @@
 
 - **作業の進め方**: issue ごとにブランチを切る。進捗は GitHub issue を正とする（#28・#41・#30・#32・#29・#19・#31・#33・#62 は完了）
 - **本番の構成**
-  - フロント：Cloudflare Workers（静的アセット。`wrangler.jsonc`）。main に push すると自動でビルド・配信される
+  - フロント：Cloudflare Workers（静的アセット。`frontend/wrangler.jsonc`）。main に push すると自動でビルド・配信される
   - API：CF Tunnel → デスクトップの `~/works/vocal-analyzer-prod`（main 専用。`docker-compose.yml` だけで起動。コードはイメージに焼き込み・ポート公開なし）
   - backend の更新：本番用フォルダで `scripts/deploy_backend.sh`（手動）。フロントと backend のコミットがずれると画面上部に黄色い帯が出る
 - **PC 2台の役割**
@@ -253,7 +253,6 @@ vocal-analyzer/
 │   └── gen_secrets.py                   # .env の秘密情報を生成する
 ├── .gitignore
 ├── nginx/default.conf                   # nginxリバースプロキシ設定
-├── wrangler.jsonc                       # Cloudflare Workers（フロントの静的アセット配信）のデプロイ設定
 ├── backend/
 │   ├── main.py                      # FastAPIアプリ本体（CORS は環境変数から読み込み）
 │   ├── database.py                  # SQLAlchemy接続・get_db()
@@ -283,6 +282,7 @@ vocal-analyzer/
 └── frontend/
     ├── .env.production              # 本番ビルドで埋め込む VITE_API_BASE_URL
     ├── vite.config.ts               # ローカル開発用の /api/* proxy 設定
+    ├── wrangler.jsonc               # Cloudflare Workers（フロントの静的アセット配信）のデプロイ設定
     └── src/
         ├── App.tsx                  # ルーティング・認証状態管理・ヘッダー
         ├── types.ts                 # 型定義・定数・ユーティリティ

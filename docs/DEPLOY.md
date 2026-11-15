@@ -136,6 +136,34 @@ docker compose exec -T backend python -c "import json, urllib.request; print(jso
 
 - フロントも戻したいときは、Cloudflare のダッシュボードで以前のデプロイに戻す（要確認：手順はまだ試していない）
 
+## フロントの deploy（#74）
+
+main に push すると、Cloudflare（Workers Builds）が次の設定でビルドして配信する。設定はダッシュボードの Workers & Pages → vocal-analyzer → Settings → Build にあり、リポジトリには入っていないので、変えたらここも直す。
+
+| 項目 | 値 |
+|---|---|
+| Root directory | `frontend` |
+| Build command | `npm ci && VITE_API_BASE_URL=https://vocal-api.supu361.dev npm run build` |
+| Deploy command | `npx wrangler deploy` |
+| Build variables | なし |
+
+- `npm ci` は `frontend/package-lock.json` のとおりにだけ入れる（#62 と同じ考え方）。`package.json` とロックがずれていればビルドが止まる
+- wrangler は `frontend/package.json` の devDependencies に版を固定して入れてある（`^` なし）。`npx wrangler deploy` は `frontend/node_modules` の wrangler を使い、`frontend/wrangler.jsonc` を読む
+- ビルドのログに `npm warn exec The following package was not found and will be installed` が出たら、固定した wrangler が使われていない。Root directory と Deploy command を見直す
+- Root directory と `wrangler.jsonc` の場所は、いっしょに変えないと deploy が失敗する。ダッシュボードの設定を変えるときは、マージの直前にする
+
+### wrangler の版を上げる手順
+
+`frontend/` で実行する。
+
+```bash
+npm install -D -E wrangler@<新しい版> && npm run build && npx wrangler deploy --dry-run
+```
+
+- `-E` で `^` を付けずに書く（付けると、ロックを作り直したときに新しい版に変わりうる）
+- `--dry-run` は Cloudflare に送らずに止まる。最初の行の版と、`Read N files from the assets directory .../frontend/dist` が出ることを確かめる
+- push したあと、ビルドのログで使われた版を確かめる
+
 ## 分析の上限と順番待ち（#13）
 
 ### 上限の一覧

@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# wrangler（deploy・dry-run）が作る作業用のフォルダ
+.wrangler
