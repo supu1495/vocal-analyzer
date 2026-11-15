@@ -5115,3 +5115,70 @@ backend でも70文字を超えたら 400 で断っている。数え方に違�
 開発で、画面に「Failed to fetch」が出た。ところが backend のログには、失敗したリクエストがなかった。Failed to fetch は、返事を受け取る前に通信が切れたときにブラウザが出すエラーで、backend がエラーを返したときとは違う。
 
 テストの最中にファイルを書き換えていたので、Vite がそれに気づいて画面を差し替え（HMR や再読み込み）、そのときに途中だった通信が打ち切られた可能性がある（要確認：原因として確かめたわけではない）。backend のログに何もないのに画面で Failed to fetch が出たら、まずブラウザ側（画面の差し替え・通信の切断）を疑う。本番では CLAUDE.md の「CF Tunnel の瞬断」でも同じエラーが出ることがある。
+
+---
+
+## wrangler の版の固定（issue #74）
+
+### devDependencies に版をちょうどで入れる（-D と -E）
+
+`frontend/` で `npm install -D -E wrangler@4.161.0` を実行して、wrangler を入れた。
+
+- `-D`：`package.json` の devDependencies に書く。devDependencies は「ビルドや開発のときだけ使い、配信する画面のコードには入らないもの」の欄。wrangler は deploy の道具なのでここに入れる
+- `-E`：版を `^` なしで、`"4.161.0"` ちょうどで書く。`^4.161.0` と書くと「4.x.x のうち 4.161.0 以上なら何でもよい」という意味になり、ロックファイルを作り直したときに新しい版に変わりうる
+
+ロックファイル（`package-lock.json`）にも、4.161.0 と、そのファイルのハッシュが書かれる。#62 の backend と同じく、いつビルドしても同じ版が入るようにするため。
+
+### npm install と npm ci の違い
+
+- `npm install`：`package.json` を見て入れる。`^` の範囲で新しい版があればそちらを選び、ロックファイルを書き換えることがある
+- `npm ci`：ロックファイルのとおりにだけ入れる。先に `node_modules` を消してから入れ直す。`package.json` とロックファイルが合っていなければ、入れずにエラーで止まる
+
+ビルドで使うのは `npm ci` のほう。前の Build command は `npm install` だったので `npm ci` に変えた。
+
+### Cloudflare は Root directory に package-lock.json があると自分で npm ci を実行する
+
+Root directory を `frontend` に変えたあとのビルドのログを見ると、Build command より前に、Cloudflare が自分で `npm clean-install`（`npm ci` の正式な名前）を実行していた。前は Root directory がリポジトリの直下で、そこには `package.json` がなかったので、この自動の install は起きていなかった。そのため今は、Cloudflare の分と Build command の `npm ci` の分で、2回入れている。Build command の `npm ci &&` を消すのは #78 で行う。
+
+### 設定ファイルの中のパスは、設定ファイルの場所から数える
+
+`wrangler.jsonc` をリポジトリの直下から `frontend/` に移し、配信するファイルの場所を `"./frontend/dist"` から `"./dist"` に変えた。`wrangler.jsonc` の中の相対パスは、コマンドを実行した場所ではなく、`wrangler.jsonc` が置いてある場所から数える。`npx wrangler deploy --dry-run` で `Read 7 files from the assets directory .../frontend/dist` と出たことで確かめた。`--dry-run` は、Cloudflare に送る直前で止まり、何を送るつもりだったかだけを表示する。
+
+### ダッシュボードの設定とリポジトリの中身は、いっしょに変える
+
+Root directory はダッシュボードの設定で、`wrangler.jsonc` の場所はリポジトリの中身。片方だけ変わると、deploy が失敗する。
+
+- ダッシュボードを先に変えた場合：古い main の `frontend/` には `wrangler.jsonc` がない
+- マージを先にした場合：新しい main の直下には `wrangler.jsonc` がない
+
+そこで、ダッシュボードを変えたらすぐにマージする順番にした。ダッシュボードの設定はリポジトリに残らないので、`docs/DEPLOY.md` に書いておく。
+
+### ホストの node_modules はコンテナから使われていなかった
+
+ホストの `frontend/node_modules` は持ち主が root で、ホストで npm を実行すると EACCES（書き込む権限がない）になっていた。開発の frontend コンテナは、`docker-compose.dev.yml` の `- /app/node_modules`（名前のないボリューム）で、自分専用の `node_modules` を使っている。`./frontend` を mount していても、`/app/node_modules` の場所だけは、そのボリュームで上から覆われている。つまりホストの `node_modules` はコンテナから見えておらず、どこからも使われていなかった。そのため `sudo rm -rf` で消して、ホストで `npm ci` から作り直してよかった。
+
+コンテナの中で npm を実行する方法もあるが、コンテナの中は root なので、書き換えた `package.json` などの持ち主が root になりうる。それでホストで実行するほうを選んだ。
+
+### npm の allowScripts の警告は、今の版では知らせるだけ
+
+install のときに、esbuild と workerd の install scripts（入れたあとに自動で動くプログラム）について警告が出た。ホストの npm（11.19.1）のドキュメント（`npm-approve-scripts.md`）には、今の版ではこれは advisory（知らせるだけ）で、scripts は止めずに動かし、まだ確認していないものを一覧で出すだけ、と書かれていた。将来の版では止めるようになる。
+
+esbuild も workerd も、本体の実行ファイルは OS ごとの別パッケージ（`@esbuild/linux-x64`・`@cloudflare/workerd-linux-64`）として入る。`esbuild --version` と `workerd --version` を実行して、どちらも動くことを確かめた。Cloudflare のビルドでも deploy は成功した。
+
+### npm audit の15件は、前からあった開発用のもの
+
+`npm audit` は、入っているライブラリに知られた脆弱性がないかを調べるコマンド。15件（11件は high）出たが、wrangler を入れる前のロックファイルでも同じ15件だった。`npm audit --omit=dev`（devDependencies を除いて調べる）は0件なので、全部が開発・ビルド用のライブラリで、配信する画面のコードには入っていない。`npm audit fix` をすると vite などの版も変わり、#74 とは別の確認が要るので、別の issue にした。
+
+### workers.dev の入り口は Access に守られていなかった
+
+ビルドのログに、`<name>.<subdomain>.workers.dev` の URL が出ていた。Workers には、独自ドメインとは別に、Cloudflare が最初から用意している workers.dev の URL がある。curl で確かめると、独自ドメインは 302 で Access のログインに飛ぶのに、workers.dev は 200 で画面がそのまま返った。Access は「このホスト名へのアクセスを守る」という設定なので、別のホスト名の workers.dev は守られない。
+
+backend の CORS は workers.dev を許可していない（事前確認が 400）ので、workers.dev の画面からログインや分析はできない。それでも使っていない入り口なので閉じる（#78）。wrangler 4.161.0 のスキーマ（`config-schema.json`）では `workers_dev` の初期値が true なので、ダッシュボードで止めるだけでなく、`wrangler.jsonc` に `false` と書く。
+
+### 長いコマンドを貼ると、PR の説明文が崩れることがある
+
+`gh pr create --body "$(cat <<'EOF' ... EOF)"` をターミナルに貼ったら、PR の説明文の途中が抜けたり、表の行が折れたりした（PR #77）。コマンドの中身は正しかったので、貼り付けたときに崩れたと考えられる（要確認：どこで崩れたかは調べていない）。説明文はファイルに書いておき、`gh pr edit 77 --body-file <ファイル>` で直した。長い本文は、最初から `--body-file` でファイルから読ませる。
+
+### 空のフォルダは git status に出ない
+
+dry-run のあと、`frontend/.wrangler/tmp` ができていたが、`git status --short` には出なかった。git はファイルを記録するもので、フォルダだけは記録しないので、空のフォルダは見えない。中にファイルができてから間違えてコミットしないように、`frontend/.gitignore` に `.wrangler` を足した。
